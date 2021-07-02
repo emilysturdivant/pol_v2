@@ -2,12 +2,8 @@
 # parameters: https://www.gbif.org/developer/occurrence#parameters
 
 # Load libraries ---------------------------------------------------------------
-# library(tabulizer)
 library(sf)
-# library(rgdal)
 library(tools)
-# library(raster)
-# library(scales)
 library(taxize)
 library(tidyverse)
 
@@ -15,6 +11,10 @@ library(tidyverse)
 data_dir <- 'data/input_data/Quesada_bioclim_pol_y_cultivos'
 pts_dir <- 'data/tidy/pollinator_points'
 dir.create(pts_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Date range
+filt_dates = FALSE
+date_range <- c(2000, 2020)
 
 # Load and tidy points for each pollinator group ----
 pts_dir_in <- file.path(data_dir, 'Completos')
@@ -94,6 +94,7 @@ for(fp in fps) {
       filter(decimalLongitude != 0 & decimalLatitude != 0) %>% 
       filter(!str_detect(issues, 'COUNTRY_COORDINATE_MISMATCH')) %>% 
       filter(coordinateUncertaintyInMeters < 1000 | is.na(coordinateUncertaintyInMeters)) %>% 
+      filter(genus != "", species != "") %>% 
       dplyr::select(matches(vars))
     
     # Drop duplicates and convert to points
@@ -102,6 +103,16 @@ for(fp in fps) {
       st_as_sf(x = .,                         
                coords = c("decimalLongitude", "decimalLatitude"),
                crs = 4326)
+    
+    # Optionally filter to date range
+    if(filt_dates) {
+      # Dates
+      date_min <- as.POSIXct(str_c(date_range[[1]], "-01-01"))
+      date_max <- as.POSIXct(str_c(date_range[[2]], "-12-31"))
+      
+      sf_df2 <- sf_df2 %>% 
+        filter(eventDate >= date_min & eventDate <= date_max)
+    }
     
     # Save
     sf_df2 %>% st_write(pts_fp, append = FALSE)
@@ -147,10 +158,11 @@ load_pts <- function(fp) {
   return(pols_hulls)
 }
 
+# Combine all points into one data file ----
 # file path for data file
-df1_fp <- file.path(pts_dir, 'points_nested_species.rds')
+pts_nested_rds <- file.path(pts_dir, 'points_nested_species.rds')
 
-if(!file.exists(df1_fp)) {
+if(!file.exists(pts_nested_rds)) {
   
   # Load, nest, and bind pre-processed points
   fps <- list.files(pts_dir, 'gpkg$', full.names = TRUE)
@@ -165,12 +177,12 @@ if(!file.exists(df1_fp)) {
     mutate(species = str_remove_all(species, "\\(.*\\) "))
   
   # Join
-  df2 <- df1 %>% 
+  dat <- df1 %>% 
     ungroup() %>% 
     left_join(abeja_subgroups, by = 'species')
   
   # Mariposas: diurna o nocturna?
-  df2 <- df2 %>% 
+  dat <- dat %>% 
     mutate(subgroup_a = case_when(
       common_group == 'Mariposas' & 
         superfamily %in% c('Papilionoidea', 'Hesperioidea', 'Hedyloidea') ~ 'diurna',
@@ -180,18 +192,27 @@ if(!file.exists(df1_fp)) {
     )
   
   # Save points
-  df2 %>% saveRDS(df1_fp)
+  dat %>% saveRDS(pts_nested_rds)
   
 } else {
   
-  df2 <- readRDS(df1_fp)
+  dat <- readRDS(pts_nested_rds)
   
 }
+
+# Filter points for modeling ----
+filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
+
+# Load and filter GBIF points for given name
+if( !file.exists(filt_pts_rds) ) {
+  dat <- dat %>% filter(nobs > 24)
+  dat %>% saveRDS(filt_pts_rds)
+} 
 
 # Save summary table
 summary_fp <- file.path('data/data_out', 'pollinator_points_summary.csv')
 dir.create(dirname(summary_fp), recursive = TRUE, showWarnings = FALSE)
-summary_tbl <- df2 %>% select(-data, -convhull) 
+summary_tbl <- dat %>% select(-data, -convhull) 
 summary_tbl %>% write_csv(summary_fp)
 
-# df2 %>% filter(str_detect(species, 'Leptonycteris'))
+# dat %>% filter(str_detect(species, 'Leptonycteris'))

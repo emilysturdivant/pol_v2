@@ -21,29 +21,55 @@ library('tidyverse')
 # Initialize -----
 unq_cells = TRUE
 mutually_exclusive_pa = TRUE
-filt_dates = FALSE
 nspecies <- 15
 rf_vers <- 2
-name <- order <- 'Hymenoptera'
 contin_vars_only <- TRUE
-# contin_vars_only <- FALSE
-noApis = TRUE
 
 # Date range
+filt_dates = FALSE
 date_range <- c(2000, 2020)
-# pol_groups <- c('Abejas', 'Avispas', 'Colibries', 'Mariposas', 'Moscas', 'Murcielagos')
+
+pts_dir <- 'data/tidy/pollinator_points'
+# noApis = TRUE
+# apis_code <- ifelse(order == 'Hymenoptera', ifelse(noApis, '_noApis', ''), '')
+
+# directory paths ----
+unq_code <- ifelse(unq_cells, 'unq_cells', 'unq_pts')
+unq_code <- ifelse(mutually_exclusive_pa, 'excl', unq_code)
+dfilt_code <- ifelse(filt_dates, '2000to2020', 'alldates')
+cont_var_code <- ifelse(contin_vars_only, '_contpred', '')
+
+rf_name <- str_c('rf', str_c(rf_vers, unq_code, dfilt_code, sep='_'), cont_var_code)
+fp_tail <- file.path('sdm', rf_name)
+pred_dir <- file.path('data', 'data_out', fp_tail)
+rf_fig_dir <- pred_dir
+dir.create(pred_dir, recursive=T, showWarnings = F)
 
 # Functions ----
 #' @export
 model_species_rf <- function(sp_df,
                              pred, 
-                             model_fp, 
+                             pred_dir,
                              sp_name,
-                             eval_fp,
-                             erf_fp,
                              mutually_exclusive_pa=TRUE,
                              unq_cells=TRUE,
                              rf_fig_dir=NULL) {
+  
+  # File paths
+  sp_nospc <- str_replace(sp_name, ' ', '_')
+  model_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
+  eval_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.csv'))
+  erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
+  
+  if(nrow(sp_df) < 1) {
+    print(str_c(sp_name, ': No rows for the given species.'))
+    return()
+  }
+  
+  if (file.exists(model_fp)) {
+    print(str_c(sp_name, ': Model already created.'))
+    return()
+  }
   
   # Presence points
   
@@ -127,7 +153,7 @@ model_species_rf <- function(sp_df,
   }
   
   # Random forest model
-  rf1 <- randomForest::randomForest(
+  rf <- randomForest::randomForest(
     pa ~ . -pa,
     data = envtrain,
     na.action = na.exclude,
@@ -136,14 +162,14 @@ model_species_rf <- function(sp_df,
   
   # Save
   dir.create(dirname(model_fp), recursive = T, showWarnings = F)
-  saveRDS(rf1, model_fp)
-  # rf1 <- readRDS(model_fp)
+  saveRDS(rf, model_fp)
+  # rf <- readRDS(model_fp)
   
   # Filenames
   dir.create(dirname(eval_fp), recursive = T, showWarnings = F)
   
   # Evaluate model with test data
-  erf <- dismo::evaluate(testpres, testbackg, rf1)
+  erf <- dismo::evaluate(testpres, testbackg, rf)
   
   # Save model evaluation
   saveRDS(erf, erf_fp)
@@ -159,14 +185,14 @@ model_species_rf <- function(sp_df,
   
   spc_eval %>% write_csv(eval_fp)
   
-  if(!is.null(rf_fig_dir)){
+  if(!is.null(pred_dir)){
     # Get plot directory
-    plot_fp <- file.path(rf_fig_dir, 'var_importance', str_c(sp_nospc, '.png'))
+    plot_fp <- file.path(pred_dir, 'var_importance', str_c(sp_nospc, '.png'))
     dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
     
     # Save plot
     png(plot_fp)
-    randomForest::varImpPlot(rf1, type=1, sort=F, 
+    randomForest::varImpPlot(rf, type=1, sort=F, 
                              main=sp_name,
                              pt.cex=1,
                              bg='black')
@@ -174,21 +200,36 @@ model_species_rf <- function(sp_df,
   }
   
   # Return
-  return(erf)
+  return(list(rf=rf, erf=erf))
 }
 
 #' @export
-predict_distribution_rf <- function(rf_fp, erf_fp, likelihood_fp, binned_fp, ext){
+predict_distribution_rf <- function(rf, 
+                                    erf, 
+                                    sp_name, 
+                                    pred_dir, 
+                                    ext, 
+                                    write_binned = FALSE, 
+                                    thresh = 'spec_sens') {
+  
+  # Filepaths  
+  sp_nospc <- str_replace(sp_name, ' ', '_')
+  likelihood_fp <- file.path(pred_dir, 'likelihood', str_glue(sp_nospc, '.tif'))
+  dir.create(dirname(likelihood_fp), recursive = TRUE, showWarnings = FALSE)
+  binned_fp <- file.path(pred_dir, str_c('binned_', thresh), 
+                         str_glue(sp_nospc, '.tif'))
+  
+  if(file.exists(likelihood_fp) & (file.exists(binned_fp) | !write_binned)) {
+    return()
+  } 
   
   # Load model
-  if(is.character(rf_fp)){
-    rf1 <- readRDS(rf_fp)
-  } else {
-    rf1 <- rf_fp
-  }
+  if(is.character(rf)){
+    rf <- readRDS(rf)
+  } 
   
   # Create map and interpolate to fill holes
-  pr_rf1 <- dismo::predict(predictors, rf1, ext=ext)
+  pr_rf1 <- dismo::predict(predictors, rf, ext=ext)
   pr_rf1 <- raster::focal(pr_rf1, 
                           w=matrix(1,nrow=3, ncol=3), 
                           fun=mean, 
@@ -200,9 +241,19 @@ predict_distribution_rf <- function(rf_fp, erf_fp, likelihood_fp, binned_fp, ext
   writeRaster(pr_rf1, likelihood_fp, overwrite=T, 
               options=c("dstnodata=-99999"), wopt=list(gdal='COMPRESS=LZW'))
   
+  # Presence-absence map
+  if (file.exists(binned_fp) | !write_binned) {
+    return()
+  } 
+  
+
+  dir.create(dirname(binned_fp), recursive = TRUE, showWarnings = FALSE)
+  
   # Apply threshold from max TPR+TNR and save
-  erf <- readRDS(erf_fp)
-  tr <- threshold(erf, 'spec_sens')
+  if(is.character(erf)) {
+    erf <- readRDS(erf)
+  } 
+  tr <- threshold(erf, thresh)
   pa_rf1 <- pr_rf1 > tr
   
   # Save
@@ -277,74 +328,6 @@ pred <- predictors[[- which(names(predictors) %in% drop_lst) ]]
 # Set extent for testing
 ext <- raster::extent(mex)
 
-# directory paths ----
-unq_code <- ifelse(unq_cells, 'unq_cells', 'unq_pts')
-unq_code <- ifelse(mutually_exclusive_pa, 'exclusive', unq_code)
-dfilt_code <- ifelse(filt_dates, '2000to2020', 'alldates')
-cont_var_code <- ifelse(contin_vars_only, '_continuouspredictors', '')
-apis_code <- ifelse(order == 'Hymenoptera', ifelse(noApis, '_noApis', ''), '')
-
-rf_name <- str_c('rf', str_c(rf_vers, unq_code, dfilt_code, sep='_'), cont_var_code)
-fp_tail <- file.path('sdm', rf_name, name)
-pred_dir <- file.path('data', 'data_out', fp_tail)
-rf_fig_dir <- file.path('figures', fp_tail)
-rf_fig_dir <- pred_dir
-dir.create(pred_dir, recursive=T, showWarnings = F)
-dir.create(rf_fig_dir, recursive=T, showWarnings = F)
-
-# Input GBIF points
-pts_fp <- str_glue("data/input_data/GBIF/family_order_query/gbif_{order}.rds")
-
-# Output filtered points
-filt_pts_rds <- file.path(pred_dir, str_c('filtered_pts_', name, '.rds'))
-
-# Load and filter GBIF points for given name ----
-if( !file.exists(filt_pts_rds) ) {
-  
-  # Load raw GBIF points
-  dat <- readRDS(pts_fp)
-  
-  # Data tidying steps: drop imprecise coordinates, drop duplicates
-  vars <- c('species', 'genus', 'tribe', 'family', 'superfamily', 'order', 'class', 'nocturna', 
-            'decimalLongitude', 'decimalLatitude', 
-            'eventDate', 'coordinateUncertaintyInMeters', 'habitat', 
-            'basisOfRecord', 'country', 'stateProvince', 'institutionCode')
-  
-  df <- dat %>% 
-    filter(coordinateUncertaintyInMeters < 1000 | is.na(coordinateUncertaintyInMeters)) %>% 
-    filter(genus != "") %>% 
-    dplyr::select(matches(vars))
-  
-  # drop duplicates
-  pol_df1 <- df %>% 
-    distinct %>% 
-    st_as_sf(x = .,                         
-             coords = c("decimalLongitude", "decimalLatitude"),
-             crs = 4326)
-  
-  # Optionally filter to date range
-  if(filt_dates) {
-    # Dates
-    date_min <- as.POSIXct(str_c(date_range[[1]], "-01-01"))
-    date_max <- as.POSIXct(str_c(date_range[[2]], "-12-31"))
-    
-    pol_df1 <- pol_df1 %>% 
-      filter(eventDate >= date_min & eventDate <= date_max)
-  }
-  
-  # Remove species with less than 25 distinct observations (based on Koch et al. 2017)
-  pol_df2 <- pol_df1 %>% 
-    st_transform(st_crs(predictors)) %>% 
-    mutate(species = ifelse(species == "", genus, species)) %>% 
-    group_by(species, genus) %>% 
-    filter(n() > 24) %>% 
-    ungroup()
-  
-  # Save
-  pol_df2 %>% saveRDS(filt_pts_rds)
-  
-}
-
 # # Merge filtered points into one file
 # pol_dir_out <- file.path(pol_dir, str_c(dfilt_code, '_gt24perSpecies'))
 # (fps <- list.files(pol_dir_out, 'gpkg$', full.names=T))
@@ -352,60 +335,46 @@ if( !file.exists(filt_pts_rds) ) {
 # combo %>% st_write(file.path(pol_dir, 'combined', str_c(dfilt_code, '_gt24perSpecies.gpkg')))
 
 # Load filtered points ----
+filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
 pol_df2 <- readRDS(filt_pts_rds)
 
-# Get species list 
-sp_counts <- pol_df2 %>% 
-  st_drop_geometry %>% 
-  count(species, genus) %>% 
-  arrange(desc(n))
+# # Get species list 
+# sp_counts <- pol_df2 %>% 
+#   st_drop_geometry %>% 
+#   count(species, genus) %>% 
+#   arrange(desc(n))
+# 
+# if(noApis) {
+#   sp_counts <- sp_counts %>% 
+#     filter(!str_detect(species, 'Apis mellifera'))
+# }
+# 
+# sp_list <- sp_counts %>% 
+#   slice(1:nspecies) %>% 
+#   dplyr::select(species) %>% 
+#   deframe
+# sp_nospc_list <- str_replace(sp_list, ' ', '_')
 
-if(noApis) {
-  sp_counts <- sp_counts %>% 
-    filter(!str_detect(species, 'Apis mellifera'))
-}
-
-sp_list <- sp_counts %>% 
-  slice(1:nspecies) %>% 
-  dplyr::select(species) %>% 
-  deframe
-sp_nospc_list <- str_replace(sp_list, ' ', '_')
-
-# ~ Make RF model for each species ----
-# sp_name <- sp_list[[2]]
-for(sp_name in sp_list) {
+# RF model for each species ----
+df <- pol_df2 %>% slice(23)
+stop <- nrow(df)
+for (i in seq(1, stop)) {
+  sp_dat <- df %>% slice(1)
+  sp_name <- sp_dat$species
+  print(str_glue("\n\n{i} of {stop}: {sp_name}"))
+    
+  # Get observation points
+  sp_df <- sp_dat$data[[1]]
   
-  print(sp_name)
-  
-  # Filepath
-  sp_nospc <- str_replace(sp_name, ' ', '_')
-  model_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
-  if (file.exists(model_fp)) {
-    print(str_c(sp_name, ': Model already created.'))
-    next
-  }
-  
-  # Filter to species
-  sp_df <- pol_df2 %>% filter(species == sp_name)
-  
-  if(nrow(sp_df) < 1) {
-    print(str_c(sp_name, ':No rows for the given species.'))
-    next
-  }
-  
-  # File paths
-  eval_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.csv'))
-  erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
-  
-  erf <- model_species_rf(sp_df,
+  mod_rf <- model_species_rf(sp_df,
                           pred, 
-                          model_fp, 
+                          pred_dir,
                           sp_name,
-                          eval_fp,
-                          erf_fp,
                           mutually_exclusive_pa,
-                          unq_cells,
-                          rf_fig_dir)
+                          unq_cells)
+  
+  predict_distribution_rf(mod_rf$rf, mod_rf$erf, sp_name, pred_dir, ext)
+  
 }
 
 # Look at model statistics together
@@ -417,9 +386,8 @@ if(length(fps) > 0) {
 }
 
 # Save TIFs of likelihood and presence/absence ----
-fps <- list.files(file.path(pred_dir, 'models'), '*.rds', full.names = T)
-
 # filter filepaths to species list
+fps <- list.files(file.path(pred_dir, 'models'), '*.rds', full.names = T)
 sp_fps <- sp_nospc_list %>% 
   map(~str_subset(.y, str_glue("{.x}.rds")), fps) %>% 
   flatten_chr()
@@ -428,19 +396,11 @@ for(rf_fp in sp_fps){
   
   # Filepaths  
   sp_nospc <- tools::file_path_sans_ext(basename(rf_fp))
-  print(sp_nospc)
-  
-  likelihood_fp <- file.path(pred_dir, 'likelihood', str_glue(sp_nospc, '.tif'))
-  binned_fp <- file.path(pred_dir, 'binned_spec_sens', str_glue(sp_nospc, '.tif'))
-  
-  if(file.exists(likelihood_fp) & file.exists(binned_fp)){
-    next
-  } 
-  
   erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
+  sp_name <- sp_nospc %>% str_replace('_', '')
   
   # Make TIFs of likelihood and presence/absence
-  predict_distribution_rf(rf_fp, erf_fp, likelihood_fp, binned_fp, ext)
+  predict_distribution_rf(rf_fp, erf_fp, sp_name, pred_dir, ext)
   
 }
 
