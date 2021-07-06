@@ -362,7 +362,7 @@ pol_df2 <- pol_df2 %>%
 # sp_nospc_list <- str_replace(sp_list, ' ', '_')
 
 # ~ RF model for each species ----
-df <- pol_df2 %>% slice(450:650)
+df <- pol_df2 %>% slice(760:762)
 stop <- nrow(df)
 for (i in seq(1, stop)) {
   
@@ -450,6 +450,7 @@ for(rf_fp in sp_fps){
 }
 
 # Look at model objects
+rf_fp <- fps[[1]]
 # sp_row <- pol_df2 %>% filter(species == 'Caria stillaticia')
 erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
 rf_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
@@ -460,8 +461,31 @@ pa_tbl <- bind_rows(tibble(value = erf@presence, true_pres = 1),
                     tibble(value = erf@absence, true_pres = 0)) %>% 
   mutate(pred_pres = cut(value, 
                          breaks = c(-Inf, 0.0787, Inf), 
-                         labels = c(0, 1)))
+                         labels = c(0, 1)),
+         result = case_when(true_pres == 1 & pred_pres == 1 ~ 'tp', 
+                         true_pres == 1 & pred_pres == 0 ~ 'fn',
+                         true_pres == 0 & pred_pres == 0 ~ 'tn',
+                         true_pres == 0 & pred_pres == 1 ~ 'fp') %>% 
+           factor(levels = c('tp', 'fp', 'fn', 'tn'))
+         )
+results <- pa_tbl %>% 
+  count(result) %>% 
+  pivot_wider(names_from = result, values_from = n) %>% 
+  mutate(precision = tp / (tp + fp), # What proportion of positive predictions was correct?
+         recall = tp / (tp + fn),# What proportion of true positives was correctly identified? ** more important for us because we're using pseudo-absences
+         oa = (tp + tn) / (tp + tn + fp + fn),
+         sens = tp / (tp + fn),
+         spec = tn / (tn + fp),
+         ppv = tp / (tp + fp),
+         npv = tn / (tn + fn), 
+         plr = sens / (1 - spec),
+         nlr = (1 - sens) / spec, 
+         tss = sens + spec - 1, 
+         or = tp*tn / (fn*fp),
+         ae = ((tp + fn) * (tp + fp) + (tn + fn) * (tn + fp)) / (tp + tn + fp + fn)^2,
+         kappa = (oa - ae) / (1 - ae))
 
+erf@TPR
 erf@confusion
 plot(erf, 'kappa')
 boxplot(erf)
