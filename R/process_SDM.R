@@ -136,6 +136,9 @@ model_species_rf <- function(sp_df,
   
   envtrain <- envtrain1 %>% dplyr::select(-cells)
   
+  # Exit if there are fewer than 25 true presence points in the training set.
+  if(nrow(filter(envtrain, pa == 1)) < 25) return()
+            
   # Testing datasets - get predictors for test presence and background points
   testpres <- data.frame( raster::extract(pred, test_1) ) %>%
     mutate(across(starts_with(c('biomes', 'ESA', 'usv')), as.factor))
@@ -174,14 +177,14 @@ model_species_rf <- function(sp_df,
   
   # Save simple statistics in CSV
   spc_eval <- tibble(
-    species=sp_name,
-    N_unq_pts=nrow(sp_df),
-    N_unq_cells=nrow(filter(envtrain, pa == 1)),
-    np=erf@np, 
-    na=erf@na, 
-    auc=erf@auc,
-    cor=erf@cor, 
-    pcor=erf@pcor, 
+    species = sp_name,
+    N_unq_pts = nrow(sp_df),
+    N_unq_cells = nrow(filter(envtrain, pa == 1)),
+    np = erf@np, 
+    na = erf@na, 
+    auc = erf@auc,
+    cor = erf@cor, 
+    pcor = erf@pcor, 
     thresh_spec_sens = dismo::threshold(erf, "spec_sens"), 
     thresh_kappa = dismo::threshold(erf, "kappa"), 
     thresh_no_omission = dismo::threshold(erf, "no_omission"), 
@@ -270,6 +273,48 @@ predict_distribution_rf <- function(rf,
   dir.create(dirname(binned_fp), recursive = T, showWarnings = F)
   writeRaster(pa_rf1, binned_fp, overwrite=T,
               options=c("dstnodata=-99999"), wopt=list(gdal='COMPRESS=LZW'))
+}
+
+get_accuracy_metrics <- function(thresh, erf) {
+  
+  # Get threshold value
+  threshold <- threshold(erf, thresh, sensitivity = 0.99)
+  
+  # Create table with predicted and observed presences and absences
+  pa_tbl <- bind_rows(tibble(value = erf@presence, true_pres = 1),
+                      tibble(value = erf@absence, true_pres = 0)) %>% 
+    mutate(pred_pres = cut(value, 
+                           breaks = c(-Inf, threshold, Inf), 
+                           labels = c(0, 1)),
+           result = case_when(true_pres == 1 & pred_pres == 1 ~ 'tp', 
+                              true_pres == 1 & pred_pres == 0 ~ 'fn',
+                              true_pres == 0 & pred_pres == 0 ~ 'tn',
+                              true_pres == 0 & pred_pres == 1 ~ 'fp') %>% 
+             factor(levels = c('tp', 'fp', 'fn', 'tn'))
+    )
+  
+  # Calculate accuracy metrics
+  cols <- c(tp = 0, fp = 0, fn = 0, tn = 0)
+  results <- pa_tbl %>% 
+    count(result) %>% 
+    pivot_wider(names_from = result, values_from = n) %>% 
+    add_column(!!!cols[!names(cols) %in% names(.)]) %>% 
+    mutate(overall_acc = (tp + tn) / (tp + tn + fp + fn),
+           sensitivity = tp / (tp + fn), # a.k.a. recall
+           # ** more important for us because we're using pseudo-absences; 
+           # What proportion of true positives was correctly identified? 
+           # Inverse of omission error
+           specificity = tn / (tn + fp),
+           PPV = tp / (tp + fp), # aka. precision 
+           # What proportion of positive predictions was correct?
+           NPV = tn / (tn + fn), 
+           PLR = sensitivity / (1 - specificity),
+           NLR = (1 - sensitivity) / specificity, 
+           TSS = sensitivity + specificity - 1, 
+           odds_ratio = tp*tn / (fn*fp),
+           ae = ((tp + fn) * (tp + fp) + (tn + fn) * (tn + fp)) / (tp + tn + fp + fn)^2,
+           Kappa = (overall_acc - ae) / (1 - ae)) %>% 
+    bind_cols(tibble(threshold = thresh), .)
 }
 
 #' @export
@@ -362,7 +407,7 @@ pol_df2 <- pol_df2 %>%
 # sp_nospc_list <- str_replace(sp_list, ' ', '_')
 
 # ~ RF model for each species ----
-df <- pol_df2 %>% slice(760:762)
+df <- pol_df2 %>% slice(1100:1400)
 stop <- nrow(df)
 for (i in seq(1, stop)) {
   
@@ -387,10 +432,150 @@ for (i in seq(1, stop)) {
                           mutually_exclusive_pa,
                           unq_cells)
   
+  if(is_empty(mod_rf)) next
+  
   # Use model to create prediction rasters
   predict_distribution_rf(mod_rf$rf, mod_rf$erf, sp_name, pred_dir, ext, pred, write_binned = TRUE)
   
 }
+
+# Create PNGs of all maps ----
+(sp_row <- pol_df2 %>% sample_n(1))
+(sp_row <- pol_df2 %>% filter(species == 'Dysschema magdala'))
+
+# testing
+# for (sp_row in pol_df2) {
+  
+  # Get data for species
+  sp_df <- sp_row$data[[1]]
+  sp_ch <- sp_row$convhull[[1]]
+  sp_name <- sp_row$species
+  sp_nospc <- str_replace(sp_name, ' ', '_')
+  group <- str_c(sp_row$common_group, sp_row$subgroup_a, sep = ', ')
+  title <- bquote(.(group)~': '~italic(.(sp_name)))
+  lklhd_fp <- file.path(pred_dir, 'likelihood', str_c(sp_nospc, '.tif'))
+  bnnd_fp <- file.path(pred_dir, 'binned_spec_sens', str_c(sp_nospc, '.tif'))
+  
+  # Filepaths
+  plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_maps.png'))
+  dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
+  
+  # Get likelihood raster
+  # Create TIFF if it doesn't already exist
+  if (!file.exists(lklhd_fp)) {
+    # Filepaths 
+    rf_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
+    erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
+    
+    # Make TIFs of likelihood and presence/absence
+    predict_distribution_rf(rf_fp, erf_fp, sp_name, pred_dir, ext, pred, write_binned = TRUE)
+    
+  }
+  
+  # Load as stars
+  lklhd_stars <- read_stars(lklhd_fp)
+  
+  # Plot
+  likelihood_plot <- ggplot() +
+    geom_stars(data = lklhd_stars) +
+    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
+    colormap::scale_fill_colormap("Occupancy\nlikelihood", na.value = "transparent", 
+                                  colormap = colormap::colormaps$viridis) +
+    ggthemes::theme_hc() +
+    theme(legend.position=c(.95, 1), legend.title.align=0, legend.justification = c(1,1)) +
+    labs(x = NULL, y = NULL)
+  
+  like_plot <- likelihood_plot +
+    # geom_sf(data = sp_ch, fill = "transparent", size = 0.2, color = "white") +
+    geom_sf(data = sp_df, color = "firebrick3", size = 1)
+  
+  # Get P/A raster as stars object
+  if (!file.exists(bnnd_fp)) {
+    # Filepaths 
+    rf_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
+    erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
+    
+    # Make TIFs of likelihood and presence/absence
+    predict_distribution_rf(rf_fp, erf_fp, sp_name, pred_dir, ext, pred, write_binned = TRUE)
+    
+  }
+  
+  # Load as stars
+  bnnd_stars <- read_stars(bnnd_fp) %>% 
+    mutate(across(everything(), ~ as.factor(.x)), 
+           across(everything(), ~ na_if(.x, 0)))
+  
+  # Plot
+  binned_map <- ggplot() +
+    geom_stars(data = bnnd_stars) +
+    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
+    # scale_fill_manual("likely present", values = c('white', 'blue4'), na.value = "transparent") +
+    scale_fill_manual(values = c('mediumblue'), na.value = "transparent", 
+                      labels = c('likely present')) +
+    ggthemes::theme_hc() +
+    theme(legend.position=c(.95, 1), 
+          # legend.title.align=0, 
+          legend.title = element_blank(),
+          legend.justification = c(1,1))+
+    labs(x = NULL, y = NULL) 
+  
+  # Get model evaluation values
+  erf_csv <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.csv'))
+  erf_rds <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
+  
+  erf_tbl <- read_csv(erf_csv) %>% 
+    select(where(is.numeric)) %>% 
+    mutate(across(where(is.numeric), ~ signif(.x, digits = 4)))
+  
+  stat_grob <- erf_tbl %>% 
+    select(-starts_with('thresh')) %>% 
+    pivot_longer(everything(), 
+                 names_to = 'Statistic', 
+                 values_to = 'Value') %>% 
+    column_to_rownames("Statistic") %>% 
+    gridExtra::tableGrob()
+  
+  thresh_grob <- erf_tbl %>% 
+    select(starts_with('thresh')) %>% 
+    pivot_longer(everything(), 
+                 names_to = 'Statistic', 
+                 names_prefix = 'thresh_',
+                 values_to = 'Threshold') %>% 
+    column_to_rownames("Statistic") %>% 
+    gridExtra::tableGrob()
+  
+  erf <- readRDS(erf_rds)
+  acc_tbl <- get_accuracy_metrics('spec_sens', erf) %>% 
+    mutate(across(where(is.numeric), ~ round(.x, digits = 2))) 
+  acc_grob <- acc_tbl %>% 
+    select(sensitivity, TSS, Kappa) %>% 
+    pivot_longer(everything(), 
+                 names_to = 'Statistic', 
+                 values_to = 'Accuracy') %>% 
+    column_to_rownames("Statistic") %>% 
+    gridExtra::tableGrob() 
+  
+  # Layout maps
+  layout <- '
+  AAABBB
+  AAABBB
+  CDEGGG
+  CDEGGG
+  '
+  maps <- wrap_plots(A = likelihood_plot, B = like_plot, 
+             C = stat_grob, D = thresh_grob, E = acc_grob, G = binned_map, 
+             design = layout) +
+    plot_annotation(
+      title = title,
+      caption = 'Top row shows relative likelihood of species presence. Red points are observations. 
+      Bottom right are areas with likelihood greater than the spec_sens threshold. 
+      Right table shows accuracy metrics for the binary map.'
+    )
+  
+  # Save
+  ggsave(plot_fp, maps, width=12, height=8, dpi=120)
+  
+# }
 
 # # Add threshold values to model eval CSV ----
 # expand_erf <- function(erf_fp) {
@@ -449,149 +634,16 @@ for(rf_fp in sp_fps){
   
 }
 
-# Look at model objects
-rf_fp <- fps[[1]]
-# sp_row <- pol_df2 %>% filter(species == 'Caria stillaticia')
+# Compare accuracy metrics by threshold ----
+fps <- list.files(file.path(pred_dir, 'models'), '*.rds', full.names = T)
+rf_fp <- fps[[10]]
+sp_nospc <- tools::file_path_sans_ext(basename(rf_fp))
 erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
-rf_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
 erf <- readRDS(erf_fp)
-rf <- readRDS(rf_fp)
 
-pa_tbl <- bind_rows(tibble(value = erf@presence, true_pres = 1),
-                    tibble(value = erf@absence, true_pres = 0)) %>% 
-  mutate(pred_pres = cut(value, 
-                         breaks = c(-Inf, 0.0787, Inf), 
-                         labels = c(0, 1)),
-         result = case_when(true_pres == 1 & pred_pres == 1 ~ 'tp', 
-                         true_pres == 1 & pred_pres == 0 ~ 'fn',
-                         true_pres == 0 & pred_pres == 0 ~ 'tn',
-                         true_pres == 0 & pred_pres == 1 ~ 'fp') %>% 
-           factor(levels = c('tp', 'fp', 'fn', 'tn'))
-         )
-results <- pa_tbl %>% 
-  count(result) %>% 
-  pivot_wider(names_from = result, values_from = n) %>% 
-  mutate(precision = tp / (tp + fp), # What proportion of positive predictions was correct?
-         recall = tp / (tp + fn),# What proportion of true positives was correctly identified? ** more important for us because we're using pseudo-absences
-         oa = (tp + tn) / (tp + tn + fp + fn),
-         sens = tp / (tp + fn),
-         spec = tn / (tn + fp),
-         ppv = tp / (tp + fp),
-         npv = tn / (tn + fn), 
-         plr = sens / (1 - spec),
-         nlr = (1 - sens) / spec, 
-         tss = sens + spec - 1, 
-         or = tp*tn / (fn*fp),
-         ae = ((tp + fn) * (tp + fp) + (tn + fn) * (tn + fp)) / (tp + tn + fp + fn)^2,
-         kappa = (oa - ae) / (1 - ae))
+c('spec_sens', 'kappa', 'no_omission', 'sensitivity') %>% 
+  map_dfr(get_accuracy_metrics, erf)
 
-erf@TPR
-erf@confusion
-plot(erf, 'kappa')
-boxplot(erf)
-density(erf)
-
-rf$predicted
-
-# Create PNGs of all maps ----
-(sp_row <- pol_df2 %>% sample_n(1))
-
-# testing
-for (sp_row in pol_df2) {
-  
-  # Get data for species
-  sp_df <- sp_row$data[[1]]
-  sp_ch <- sp_row$convhull[[1]]
-  sp_name <- sp_row$species
-  sp_nospc <- str_replace(sp_name, ' ', '_')
-  group <- str_c(sp_row$common_group, sp_row$subgroup_a, sep = ', ')
-  title <- str_c(group, ': ', sp_name)
-  lklhd_fp <- file.path(pred_dir, 'likelihood', str_c(sp_nospc, '.tif'))
-  bnnd_fp <- file.path(pred_dir, 'binned_spec_sens', str_c(sp_nospc, '.tif'))
-  
-  # Filepaths
-  plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_maps.png'))
-  dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
-  
-  # Get likelihood raster
-  # Create TIFF if it doesn't already exist
-  if (!file.exists(lklhd_fp)) {
-    # Filepaths 
-    rf_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
-    erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
-    
-    # Make TIFs of likelihood and presence/absence
-    predict_distribution_rf(rf_fp, erf_fp, sp_name, pred_dir, ext, pred, write_binned = TRUE)
-    
-  }
-  
-  # Load as stars
-  lklhd_stars <- read_stars(lklhd_fp)
-  
-  # Plot
-  likelihood_plot <- ggplot() +
-    geom_stars(data = lklhd_stars) +
-    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
-    colormap::scale_fill_colormap("Occupancy\nlikelihood", na.value = "transparent", 
-                                  colormap = colormap::colormaps$viridis) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), legend.title.align=0, legend.justification = c(1,1)) +
-    labs(x = NULL, y = NULL)
-  
-  like_plot <- likelihood_plot +
-    # geom_sf(data = sp_ch, fill = "transparent", size = 0.2, color = "white") +
-    geom_sf(data = sp_df, color = "firebrick3", size = 1)
-  
-  # Get P/A raster as stars object
-  if (!file.exists(bnnd_fp)) {
-    # Filepaths 
-    rf_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
-    erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
-    
-    # Make TIFs of likelihood and presence/absence
-    predict_distribution_rf(rf_fp, erf_fp, sp_name, pred_dir, ext, pred, write_binned = TRUE)
-    
-  }
-  
-  # Load as stars
-  bnnd_stars <- read_stars(bnnd_fp) %>% 
-    mutate(across(everything(), ~ as.factor(.x)), 
-           across(everything(), ~ na_if(.x, 0)))
-
-  # Plot
-  binned_map <- ggplot() +
-    geom_stars(data = bnnd_stars) +
-    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
-    # scale_fill_manual("likely present", values = c('white', 'blue4'), na.value = "transparent") +
-    scale_fill_manual(values = c('mediumblue'), na.value = "transparent", 
-                      labels = c('likely present')) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), 
-          # legend.title.align=0, 
-          legend.title = element_blank(),
-          legend.justification = c(1,1))+
-    labs(x = NULL, y = NULL) 
-  
-  # Get model evaluation values
-  erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.csv'))
-  erf <- read_csv(erf_fp)
-  grob1 <- erf %>% 
-    select(where(is.numeric)) %>% 
-    mutate(across(where(is.numeric), ~ signif(.x, digits = 4))) %>% 
-    t() %>% 
-    gridExtra::tableGrob()
-  
-  # Layout maps
-  maps <- likelihood_plot + like_plot + grob1 + binned_map +
-    plot_layout(ncol = 2, nrow = 2) +
-    plot_annotation(
-      title = title
-    )
-  
-  # Save
-  ggsave(plot_fp, maps, width=12, height=8, dpi=120)
-  
-}
 
 # Create PNGs of likelihood maps ----
 fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif', full.names=T)
