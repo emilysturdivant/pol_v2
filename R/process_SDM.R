@@ -407,7 +407,7 @@ pol_df2 <- pol_df2 %>%
 # sp_nospc_list <- str_replace(sp_list, ' ', '_')
 
 # ~ RF model for each species ----
-df <- pol_df2 %>% slice(1100:1400)
+df <- pol_df2
 stop <- nrow(df)
 for (i in seq(1, stop)) {
   
