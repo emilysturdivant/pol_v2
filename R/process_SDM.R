@@ -360,6 +360,54 @@ stack_sdms <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   
 }
 
+plot_lklhd_map <- function(lklhd_tif, filename = NULL){
+  # Load as stars
+  lklhd_stars <- read_stars(lklhd_tif)
+  
+  # Plot
+  p <- ggplot() +
+    geom_stars(data = lklhd_stars) +
+    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
+    colormap::scale_fill_colormap("Occupancy\nlikelihood", na.value = "transparent", 
+                                  colormap = colormap::colormaps$viridis) +
+    ggthemes::theme_hc() +
+    theme(legend.position=c(.95, 1), legend.title.align=0, legend.justification = c(1,1)) +
+    labs(x = NULL, y = NULL)
+  
+  # Save
+  if(is.character(filename)) ggsave(filename, p, width=9, height=5.7, dpi=120)
+  
+  # Return
+  return(p)
+}
+
+plot_binned_map <- function(bin_tif, filename = NULL) {
+  # Load as stars
+  bnnd_stars <- read_stars(bin_tif) %>% 
+    mutate(across(everything(), ~ as.factor(.x)), 
+           across(everything(), ~ na_if(.x, 0)))
+  
+  # Plot
+  p <- ggplot() +
+    geom_stars(data = bnnd_stars) +
+    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
+    # scale_fill_manual("likely present", values = c('white', 'blue4'), na.value = "transparent") +
+    scale_fill_manual(values = c('mediumblue'), na.value = "transparent", 
+                      labels = c('likely present')) +
+    ggthemes::theme_hc() +
+    theme(legend.position=c(.95, 1), 
+          # legend.title.align=0, 
+          legend.title = element_blank(),
+          legend.justification = c(1,1))+
+    labs(x = NULL, y = NULL) 
+  
+  # Save
+  if(is.character(filename)) ggsave(filename, p, width=9, height=5.7, dpi=120)
+  
+  # Return
+  return(p)
+}
+
 plot_qc_maps <- function(sp_row, rf_fig_dir) {
   
   # Get data for species
@@ -388,24 +436,18 @@ plot_qc_maps <- function(sp_row, rf_fig_dir) {
     
   }
   
-  # Load as stars
-  lklhd_stars <- read_stars(lklhd_fp)
-  
   # Plot
-  likelihood_plot <- ggplot() +
-    geom_stars(data = lklhd_stars) +
-    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
-    colormap::scale_fill_colormap("Occupancy\nlikelihood", na.value = "transparent", 
-                                  colormap = colormap::colormaps$viridis) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), legend.title.align=0, legend.justification = c(1,1)) +
-    labs(x = NULL, y = NULL)
+  likelihood_plot <- plot_lklhd_map(lklhd_fp)
   
+  # Add presence points to likelihood plot
   like_plot <- likelihood_plot +
-    # geom_sf(data = sp_ch, fill = "transparent", size = 0.2, color = "white") +
-    geom_sf(data = sp_df, color = "firebrick3", size = 1)
+    scale_fill_gradient(low = 'gray50', high = 'white', na.value = "transparent") +
+    geom_sf(data = sp_df, color = "firebrick3", size = .5, alpha = 0.5,
+            show.legend = TRUE) +
+    # scale_color_manual(name = "presence") +
+    guides(fill = 'none')
   
-  # Get P/A raster as stars object
+  # Create P/A raster if doesn't exist
   if (!file.exists(bnnd_fp)) {
     # Filepaths 
     rf_fp <- file.path(pred_dir, 'models', str_c(sp_nospc, '.rds'))
@@ -416,24 +458,8 @@ plot_qc_maps <- function(sp_row, rf_fig_dir) {
     
   }
   
-  # Load as stars
-  bnnd_stars <- read_stars(bnnd_fp) %>% 
-    mutate(across(everything(), ~ as.factor(.x)), 
-           across(everything(), ~ na_if(.x, 0)))
-  
   # Plot
-  binned_map <- ggplot() +
-    geom_stars(data = bnnd_stars) +
-    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
-    # scale_fill_manual("likely present", values = c('white', 'blue4'), na.value = "transparent") +
-    scale_fill_manual(values = c('mediumblue'), na.value = "transparent", 
-                      labels = c('likely present')) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), 
-          # legend.title.align=0, 
-          legend.title = element_blank(),
-          legend.justification = c(1,1))+
-    labs(x = NULL, y = NULL) 
+  binned_map <- plot_binned_map(bnnd_fp)
   
   # Get model evaluation values
   erf_csv <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.csv'))
@@ -443,6 +469,7 @@ plot_qc_maps <- function(sp_row, rf_fig_dir) {
     select(where(is.numeric)) %>% 
     mutate(across(where(is.numeric), ~ signif(.x, digits = 4)))
   
+  # Table with model statistics
   stat_grob <- erf_tbl %>% 
     select(-starts_with('thresh')) %>% 
     pivot_longer(everything(), 
@@ -451,6 +478,7 @@ plot_qc_maps <- function(sp_row, rf_fig_dir) {
     column_to_rownames("Statistic") %>% 
     gridExtra::tableGrob()
   
+  # Table with threshold values
   thresh_grob <- erf_tbl %>% 
     select(starts_with('thresh')) %>% 
     pivot_longer(everything(), 
@@ -460,6 +488,7 @@ plot_qc_maps <- function(sp_row, rf_fig_dir) {
     column_to_rownames("Statistic") %>% 
     gridExtra::tableGrob()
   
+  # Table with accuracy values after binning at given thresholds
   erf <- readRDS(erf_rds)
   acc_tbl <- get_accuracy_metrics('spec_sens', erf) %>% 
     mutate(across(where(is.numeric), ~ round(.x, digits = 2))) 
@@ -476,13 +505,15 @@ plot_qc_maps <- function(sp_row, rf_fig_dir) {
   AAABBB
   AAABBB
   CDEGGG
-  CDEGGG
+  ###GGG
   '
-  maps <- wrap_plots(A = likelihood_plot, B = like_plot, 
+  maps <- wrap_plots(A = like_plot, B = likelihood_plot, 
                      C = stat_grob, D = thresh_grob, E = acc_grob, G = binned_map, 
                      design = layout) +
     plot_annotation(
       title = title,
+      tag_levels = 'a',
+      tag_suffix = ')', 
       caption = 'Top row shows relative likelihood of species presence. Red points are observations. 
       Bottom right are areas with likelihood greater than the spec_sens threshold. 
       Right table shows accuracy metrics for the binary map.'
@@ -574,16 +605,11 @@ for (i in seq(1, stop)) {
   
 }
 
-# ***Create PNGs of all maps ----
+# pngs for QC ----
 (sp_row <- pol_df2 %>% sample_n(1))
 # (sp_row <- pol_df2 %>% filter(species == 'Dysschema magdala'))
 
 plot_qc_maps(sp_row, rf_fig_dir)
-
-# testing
-# for (sp_row in pol_df2) {
-
-# }
 
 # # Add threshold values to model eval CSV ----
 # expand_erf <- function(erf_fp) {
@@ -653,7 +679,7 @@ c('spec_sens', 'kappa', 'no_omission', 'sensitivity') %>%
   map_dfr(get_accuracy_metrics, erf)
 
 
-# Create PNGs of likelihood maps ----
+# pngs of likelihood maps ----
 fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif', full.names=T)
 
 # filter filepaths to species list
@@ -676,19 +702,10 @@ for (lklhd_fp in fps) {
   sp_df <- sp_dat$data[[1]]
   sp_ch <- sp_dat$convhull[[1]]
   
-  # Load TIFF as stars
-  pr_rf1_stars <- read_stars(lklhd_fp)
-
   # Plot
-  likelihood_plot <- ggplot() +
-    geom_stars(data=pr_rf1_stars) +
-    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "black") +
-    colormap::scale_fill_colormap("Occupancy\nlikelihood", na.value = "transparent", 
-                                  colormap = colormap::colormaps$viridis) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), legend.title.align=0, legend.justification = c(1,1)) +
-    labs(x = NULL, y = NULL)
+  likelihood_plot <- plot_lklhd_map(lklhd_fp)
   
+  # Add convex hull and presence points
   like_plot <- likelihood_plot +
     geom_sf(data = sp_ch, fill = "transparent", size = 0.2, color = "white") +
     geom_sf(data = sp_df)
@@ -698,7 +715,7 @@ for (lklhd_fp in fps) {
   
 }
 
-# Create PNGs of presence maps ----
+# pngs of presence maps ----
 fps <- list.files(file.path(pred_dir, 'binned_spec_sens'), '*.tif', full.names=T)
 for (fp in fps) {
   
@@ -708,21 +725,7 @@ for (fp in fps) {
   plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_bin_specsens.png'))
   dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
   
-  # Load TIFF as stars
-  pa_rf1_stars <- read_stars(fp)
-  
-  # Plot
-  binned_map <- ggplot() +
-    geom_stars(data=pa_rf1_stars) +
-    geom_sf(data = mex, fill = "transparent", size = 0.2, color = "black") +
-    colormap::scale_fill_colormap("likely present", na.value = "transparent", 
-                                  colormap = colormap::colormaps$viridis) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), legend.title.align=0, legend.justification = c(1,1))+
-    labs(x = NULL, y = NULL) 
-  
-  # Save
-  ggsave(plot_fp, binned_map, width=9, height=5.7, dpi=120)
+  binned_map <- plot_binned_map(fp, binned_map)
   
 }
 
