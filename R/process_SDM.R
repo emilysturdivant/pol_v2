@@ -35,8 +35,9 @@ pts_dir <- 'data/tidy/pollinator_points'
 # apis_code <- ifelse(order == 'Hymenoptera', ifelse(noApis, '_noApis', ''), '')
 
 # directory paths ----
-unq_code <- ifelse(unq_cells, 'unq_cells', 'unq_pts')
-unq_code <- ifelse(mutually_exclusive_pa, 'excl', unq_code)
+unq_code <- ifelse(mutually_exclusive_pa, 
+                   'excl', 
+                   ifelse(unq_cells, 'unq_cells', 'unq_pts'))
 dfilt_code <- ifelse(filt_dates, '2000to2020', 'alldates')
 cont_var_code <- ifelse(contin_vars_only, '_contpred', '')
 
@@ -359,92 +360,7 @@ stack_sdms <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   
 }
 
-# Mexico
-mex <- raster::getData('GADM', country='MEX', level=1, 
-                       path='data/input_data/context_Mexico') %>% 
-  st_as_sf()
-
-# Load environment variables ----
-crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
-predictors <- raster::stack(list.files(crop_dir, 'tif$', full.names=T))
-
-# Remove layers from predictors
-drop_lst <- c('biomes_CVEECON2', 'biomes_CVEECON1', 'biomes_CVEECON4',
-              'ESACCI.LC.L4.LC10.Map.10m.MEX_2016_2018', 
-              'usv250s6gw_USV_SVI')
-
-if(contin_vars_only) {
-  drop_lst <- c(drop_lst, 
-                'biomes_CVEECON3', 'ESACCI.LC.L4.LCCS.Map.300m.P1Y.2015.v2.0.7cds')
-}
-
-pred <- predictors[[- which(names(predictors) %in% drop_lst) ]]
-
-# Set extent for testing
-ext <- raster::extent(mex)
-
-# Load filtered points ----
-filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
-pol_df2 <- readRDS(filt_pts_rds)
-pol_df2 <- pol_df2 %>% 
-  filter(genus != "", species != "") %>% 
-  filter(!is.na(genus), !is.na(species))
-
-# # Get species list
-# sp_counts <- pol_df2 %>%
-#   select(species, genus, nobs) %>% 
-#   arrange(desc(nobs))
-# 
-# if(noApis) {
-#   sp_counts <- sp_counts %>%
-#     filter(!str_detect(species, 'Apis mellifera'))
-# }
-# 
-# sp_list <- sp_counts %>%
-#   slice(1:nspecies) %>%
-#   dplyr::select(species) %>%
-#   deframe
-# sp_nospc_list <- str_replace(sp_list, ' ', '_')
-
-# ~ RF model for each species ----
-df <- pol_df2
-stop <- nrow(df)
-for (i in seq(1, stop)) {
-  
-  # Get data
-  sp_dat <- df %>% slice(i)
-  sp_name <- sp_dat$species
-  sp_nospc <- sp_name %>% str_replace(' ', '_')
-  print(str_glue("\n\n{i} of {stop}: {sp_name}"))
-    
-  # Get observation points
-  sp_df <- sp_dat$data[[1]]
-  
-  # Save points
-  pts_fp <- file.path(pred_dir, 'species_points', str_c(sp_nospc, '.gpkg'))
-  if(!file.exists(pts_fp)) sp_df %>% st_write(pts_fp)
-  
-  # Run random forest and model evaluation
-  mod_rf <- model_species_rf(sp_df,
-                          pred, 
-                          pred_dir,
-                          sp_name,
-                          mutually_exclusive_pa,
-                          unq_cells)
-  
-  if(is_empty(mod_rf)) next
-  
-  # Use model to create prediction rasters
-  predict_distribution_rf(mod_rf$rf, mod_rf$erf, sp_name, pred_dir, ext, pred, write_binned = TRUE)
-  
-}
-
-# Create PNGs of all maps ----
-(sp_row <- pol_df2 %>% sample_n(1))
-(sp_row <- pol_df2 %>% filter(species == 'Dysschema magdala'))
-
-# testing
-# for (sp_row in pol_df2) {
+plot_qc_maps <- function(sp_row, rf_fig_dir) {
   
   # Get data for species
   sp_df <- sp_row$data[[1]]
@@ -563,8 +479,8 @@ for (i in seq(1, stop)) {
   CDEGGG
   '
   maps <- wrap_plots(A = likelihood_plot, B = like_plot, 
-             C = stat_grob, D = thresh_grob, E = acc_grob, G = binned_map, 
-             design = layout) +
+                     C = stat_grob, D = thresh_grob, E = acc_grob, G = binned_map, 
+                     design = layout) +
     plot_annotation(
       title = title,
       caption = 'Top row shows relative likelihood of species presence. Red points are observations. 
@@ -574,7 +490,99 @@ for (i in seq(1, stop)) {
   
   # Save
   ggsave(plot_fp, maps, width=12, height=8, dpi=120)
+}
+
+
+# Load environment variables ----
+# Mexico
+mex <- raster::getData('GADM', country='MEX', level=1, 
+                       path='data/input_data/context_Mexico') %>% 
+  st_as_sf()
+
+# Environment variables
+crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
+predictors <- raster::stack(list.files(crop_dir, 'tif$', full.names=T))
+
+# Remove layers from predictors
+drop_lst <- c('biomes_CVEECON2', 'biomes_CVEECON1', 'biomes_CVEECON4',
+              'ESACCI.LC.L4.LC10.Map.10m.MEX_2016_2018', 
+              'usv250s6gw_USV_SVI')
+
+if(contin_vars_only) {
+  drop_lst <- c(drop_lst, 
+                'biomes_CVEECON3', 'ESACCI.LC.L4.LCCS.Map.300m.P1Y.2015.v2.0.7cds')
+}
+
+pred <- predictors[[- which(names(predictors) %in% drop_lst) ]]
+
+# Set extent for testing
+ext <- raster::extent(mex)
+
+# Load filtered points ----
+filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
+pol_df2 <- readRDS(filt_pts_rds)
+pol_df2 <- pol_df2 %>% 
+  filter(genus != "", species != "") %>% 
+  filter(!is.na(genus), !is.na(species))
+
+# # Get species list
+# sp_counts <- pol_df2 %>%
+#   select(species, genus, nobs) %>% 
+#   arrange(desc(nobs))
+# 
+# if(noApis) {
+#   sp_counts <- sp_counts %>%
+#     filter(!str_detect(species, 'Apis mellifera'))
+# }
+# 
+# sp_list <- sp_counts %>%
+#   slice(1:nspecies) %>%
+#   dplyr::select(species) %>%
+#   deframe
+# sp_nospc_list <- str_replace(sp_list, ' ', '_')
+
+# ~ RF model for each species ----
+df <- pol_df2
+stop <- nrow(df)
+for (i in seq(1, stop)) {
   
+  # Get data
+  sp_dat <- df %>% slice(i)
+  sp_name <- sp_dat$species
+  sp_nospc <- sp_name %>% str_replace(' ', '_')
+  print(str_glue("\n\n{i} of {stop}: {sp_name}"))
+    
+  # Get observation points
+  sp_df <- sp_dat$data[[1]]
+  
+  # Save points
+  pts_fp <- file.path(pred_dir, 'species_points', str_c(sp_nospc, '.gpkg'))
+  if(!file.exists(pts_fp)) sp_df %>% st_write(pts_fp)
+  
+  # Run random forest and model evaluation
+  mod_rf <- model_species_rf(sp_df,
+                          pred, 
+                          pred_dir,
+                          sp_name,
+                          mutually_exclusive_pa,
+                          unq_cells)
+  
+  if(is_empty(mod_rf)) next
+  
+  # Use model to create prediction rasters
+  predict_distribution_rf(mod_rf$rf, mod_rf$erf, sp_name, pred_dir, ext, pred, write_binned = TRUE)
+  
+}
+
+# ***Create PNGs of all maps ----
+(sp_row <- pol_df2 %>% sample_n(1))
+# (sp_row <- pol_df2 %>% filter(species == 'Dysschema magdala'))
+
+plot_qc_maps(sp_row, rf_fig_dir)
+
+# testing
+# for (sp_row in pol_df2) {
+
 # }
 
 # # Add threshold values to model eval CSV ----
