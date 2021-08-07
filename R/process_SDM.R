@@ -47,6 +47,11 @@ pred_dir <- file.path('data', 'data_out', fp_tail)
 rf_fig_dir <- pred_dir
 dir.create(pred_dir, recursive=T, showWarnings = F)
 
+# Mexico for masking and mapping
+mex <- raster::getData('GADM', country='MEX', level=1, 
+                       path='data/input_data/context_Mexico') %>% 
+  st_as_sf()
+
 # Functions ----
 #' @export
 model_species_rf <- function(sp_df,
@@ -246,11 +251,13 @@ predict_distribution_rf <- function(rf,
                             fun=mean, 
                             NAonly=TRUE, 
                             na.rm=TRUE) 
+    pr_rf1 <- round(pr_rf1, 3)
     
     # Save likelihood raster
-    dir.create(dirname(likelihood_fp), recursive = T, showWarnings = F)
     writeRaster(pr_rf1, likelihood_fp, overwrite=T, 
-                options=c("dstnodata=-99999"), wopt=list(gdal='COMPRESS=LZW'))
+                options=c("dstnodata=-99999"), 
+                wopt=list(gdal='COMPRESS=LZW',
+                          datatype = ''))
     
   } else if(write_binned & !file.exists(binned_fp)) {
     pr_rf1 <- raster(likelihood_fp)
@@ -360,6 +367,73 @@ stack_sdms <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   
 }
 
+#' @export
+stack_sdms_terra <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
+  
+  interval <- 30
+  idx <- seq(to = length(sp_fps), by = interval)
+  
+  temp_dir <- file.path(dirname(rich_tif_fp), 'temp')
+  unlink(temp_dir, recursive = TRUE)
+  dir.create(temp_dir)
+  
+  for(i in idx) {
+    fps_sub <- sp_fps[i:(i+interval-1)]
+    fps_sub <- fps_sub[!is.na(fps_sub)]
+    pol_stack <- terra::rast(fps_sub)
+    
+    temp_fp <- file.path(dirname(rich_tif_fp), 'temp', 
+                         str_c(i, basename(rich_tif_fp)))
+    # Sum layers and save 
+    pol_rich <- sum(pol_stack, na.rm=T)
+    pol_rich_msk <- terra::mask(pol_rich, terra::vect(mex), filename = temp_fp,
+                                overwrite = TRUE)
+  }
+
+  # Sum temp layers
+  temp_fps <- list.files(temp_dir, basename(rich_tif_fp))
+  pol_stack <- terra::rast(fps_sub)
+  pol_rich <- sum(pol_stack, na.rm=T)
+  
+  # Convert back to decimal and save
+  pol_rich_msk <- terra::mask(pol_rich, terra::vect(mex), filename = rich_tif_fp,
+                              overwrite = TRUE)
+  
+  # Plot richness
+  pol_rich_stars <- st_as_stars(pol_rich_msk)
+  rich_plot  <- ggplot() +
+    geom_stars(data=pol_rich_stars) +
+    geom_sf(data = mex, fill = "transparent", size = 0.2, color = alpha("lightgray", 0.2)) +
+    colormap::scale_fill_colormap(str_glue("Richness\n(N = {length(sp_fps)})"), 
+                                  na.value = "transparent", 
+                                  colormap = colormap::colormaps$viridis) +    
+    theme_minimal() +
+    theme(legend.position = c(.95, 1), 
+          legend.title.align = 0,
+          legend.justification = c(1,1),
+          panel.grid = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank())
+  
+  # Save
+  ggsave(rich_plot_fp, rich_plot, width=9, height=5.7, dpi=120)
+  
+  # Facet individual PA maps
+  # pa_facets  <- rasterVis::gplot(pol_stack) +
+  #   geom_tile(aes(fill = value)) +
+  #   colormap::scale_fill_colormap(str_glue("Occupancy likelihood"), na.value = "transparent",
+  #                                 colormap = colormap::colormaps$viridis) +
+  #   theme_minimal() +
+  #   theme(legend.position='bottom') +
+  #   labs(x = NULL, y = NULL) +
+  #   coord_equal() +
+  #   facet_wrap(~ variable, nrow=3)
+  # 
+  # # Save
+  # ggsave(file.path(rf_fig_dir, str_glue('Likhd_{nlayers(pol_stack)}species.png')), pa_facets, width=9, height=5)
+  
+}
+
 plot_lklhd_map <- function(lklhd_tif, filename = NULL){
   # Load as stars
   lklhd_stars <- read_stars(lklhd_tif)
@@ -370,9 +444,14 @@ plot_lklhd_map <- function(lklhd_tif, filename = NULL){
     geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
     colormap::scale_fill_colormap("Occupancy\nlikelihood", na.value = "transparent", 
                                   colormap = colormap::colormaps$viridis) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), legend.title.align=0, legend.justification = c(1,1)) +
-    labs(x = NULL, y = NULL)
+    theme_minimal() +
+    theme(legend.position = c(.95, 1), 
+          legend.title.align = 0,
+          legend.justification = c(1,1),
+          panel.grid.minor = element_blank(),
+          panel.grid = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank())
   
   # Save
   if(is.character(filename)) ggsave(filename, p, width=9, height=5.7, dpi=120)
@@ -391,15 +470,15 @@ plot_binned_map <- function(bin_tif, filename = NULL) {
   p <- ggplot() +
     geom_stars(data = bnnd_stars) +
     geom_sf(data = mex, fill = "transparent", size = 0.2, color = "gray70") +
-    # scale_fill_manual("likely present", values = c('white', 'blue4'), na.value = "transparent") +
     scale_fill_manual(values = c('mediumblue'), na.value = "transparent", 
                       labels = c('likely present')) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), 
-          # legend.title.align=0, 
+    theme_minimal() +
+    theme(legend.position = c(.95, 1), 
           legend.title = element_blank(),
-          legend.justification = c(1,1))+
-    labs(x = NULL, y = NULL) 
+          legend.justification = c(1,1),
+          panel.grid = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank())
   
   # Save
   if(is.character(filename)) ggsave(filename, p, width=9, height=5.7, dpi=120)
@@ -505,15 +584,27 @@ plot_qc_maps <- function(sp_row, rf_fig_dir) {
   AAABBB
   AAABBB
   CDEGGG
-  ###GGG
+  CDEGGG
   '
-  maps <- wrap_plots(A = like_plot, B = likelihood_plot, 
-                     C = stat_grob, D = thresh_grob, E = acc_grob, G = binned_map, 
+  layout <- '
+  AAAABBBB
+  AAAABBBB
+  CCDDGGGG
+  CCDDGGGG
+  '
+  maps <- wrap_plots(A = like_plot, 
+                     B = likelihood_plot, 
+                     C = stat_grob, D = thresh_grob, 
+                     # E = acc_grob, 
+                     G = binned_map + 
+                       inset_element(acc_grob, left = 0.05, bottom = 0, 
+                                     right = 0.3, top = 0.35
+                                     ), 
                      design = layout) +
     plot_annotation(
       title = title,
-      tag_levels = 'a',
-      tag_suffix = ')', 
+      # tag_levels = 'a',
+      # tag_suffix = ')', 
       caption = 'Top row shows relative likelihood of species presence. Red points are observations. 
       Bottom right are areas with likelihood greater than the spec_sens threshold. 
       Right table shows accuracy metrics for the binary map.'
@@ -522,32 +613,6 @@ plot_qc_maps <- function(sp_row, rf_fig_dir) {
   # Save
   ggsave(plot_fp, maps, width=12, height=8, dpi=120)
 }
-
-
-# Load environment variables ----
-# Mexico
-mex <- raster::getData('GADM', country='MEX', level=1, 
-                       path='data/input_data/context_Mexico') %>% 
-  st_as_sf()
-
-# Environment variables
-crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
-predictors <- raster::stack(list.files(crop_dir, 'tif$', full.names=T))
-
-# Remove layers from predictors
-drop_lst <- c('biomes_CVEECON2', 'biomes_CVEECON1', 'biomes_CVEECON4',
-              'ESACCI.LC.L4.LC10.Map.10m.MEX_2016_2018', 
-              'usv250s6gw_USV_SVI')
-
-if(contin_vars_only) {
-  drop_lst <- c(drop_lst, 
-                'biomes_CVEECON3', 'ESACCI.LC.L4.LCCS.Map.300m.P1Y.2015.v2.0.7cds')
-}
-
-pred <- predictors[[- which(names(predictors) %in% drop_lst) ]]
-
-# Set extent for testing
-ext <- raster::extent(mex)
 
 # Load filtered points ----
 filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
@@ -573,7 +638,27 @@ pol_df2 <- pol_df2 %>%
 # sp_nospc_list <- str_replace(sp_list, ' ', '_')
 
 # ~ RF model for each species ----
-df <- pol_df2
+# Load environment variables ----
+crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
+predictors <- raster::stack(list.files(crop_dir, 'tif$', full.names=T))
+
+# Remove layers from predictors
+drop_lst <- c('biomes_CVEECON2', 'biomes_CVEECON1', 'biomes_CVEECON4',
+              'ESACCI.LC.L4.LC10.Map.10m.MEX_2016_2018', 
+              'usv250s6gw_USV_SVI')
+
+if(contin_vars_only) {
+  drop_lst <- c(drop_lst, 
+                'biomes_CVEECON3', 'ESACCI.LC.L4.LCCS.Map.300m.P1Y.2015.v2.0.7cds')
+}
+
+pred <- predictors[[- which(names(predictors) %in% drop_lst) ]]
+
+# Set extent for testing
+ext <- raster::extent(mex)
+
+# Model each species
+df <- pol_df2 %>% filter(common_group == 'Moscas')
 stop <- nrow(df)
 for (i in seq(1, stop)) {
   
@@ -604,12 +689,6 @@ for (i in seq(1, stop)) {
   predict_distribution_rf(mod_rf$rf, mod_rf$erf, sp_name, pred_dir, ext, pred, write_binned = TRUE)
   
 }
-
-# pngs for QC ----
-(sp_row <- pol_df2 %>% sample_n(1))
-# (sp_row <- pol_df2 %>% filter(species == 'Dysschema magdala'))
-
-plot_qc_maps(sp_row, rf_fig_dir)
 
 # # Add threshold values to model eval CSV ----
 # expand_erf <- function(erf_fp) {
@@ -643,11 +722,25 @@ plot_qc_maps(sp_row, rf_fig_dir)
 
 # Look at model statistics together
 fps <- list.files(file.path(pred_dir, 'model_evals'), '*.csv$', full.names = T)
-if(length(fps) > 0) {
-  eval_tbl <- fps %>% purrr::map_dfr(read.csv)
-  eval_tbl_fp <- file.path(pred_dir, str_c('model_evals_', length(fps), 'species.csv'))
-  eval_tbl %>% write_csv(eval_tbl_fp)
+eval_tbl_fp <- file.path(pred_dir, str_c('model_evals_', length(fps), 'species.csv'))
+if(!file.exists(eval_tbl_fp)){
+  if(length(fps) > 0) {
+    eval_tbl <- fps %>% purrr::map_dfr(read.csv)
+    eval_tbl %>% write_csv(eval_tbl_fp)
+  }
 }
+eval_tbl <- read_csv(eval_tbl_fp)
+pol_df3 <- pol_df2 %>% left_join(eval_tbl, by = 'species')
+
+# pngs for QC ----
+(sp_row <- pol_df2 %>% sample_n(1))
+# (sp_row <- pol_df2 %>% filter(species == 'Dysschema magdala'))
+(sp_row <- pol_df3 %>% arrange(auc) %>% slice(1))
+(sp_row <- pol_df3 %>% arrange(N_unq_cells) %>% slice(2))
+(sp_row <- pol_df3 %>% filter(N_unq_cells < 20) %>% sample_n(1))
+
+plot_qc_maps(sp_row, rf_fig_dir)
+
 
 # Save TIFs of likelihood and presence/absence ----
 # filter filepaths to species list
@@ -730,35 +823,68 @@ for (fp in fps) {
 }
 
 # ~ COMBINE Sum likelihood maps ----
-# list species (such as nocturnal butterflies)
-if(pol_group == 'Mariposas'){
-  sp_groups <- pol_df1 %>% st_drop_geometry %>% distinct(species, nocturna)
-  list1 <- sp_groups %>%
-    filter(nocturna=='nocturna') %>%
-    transmute(species = str_replace_all(species, ' ', '_')) %>% 
-    deframe
-  
-  l1_pattern <- str_c(list1, collapse='|')
-  
-  fps <- list.files(file.path(pred_dir, 'likelihood'), 'tif$', full.name=T) %>% 
-    str_subset(str_glue('{l1_pattern}'))
+# Add filenames for likelihood tifs 
+fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif$', full.names = T) %>% 
+  as_tibble_col('lklhd_tif') %>% 
+  mutate(species = basename(tools::file_path_sans_ext(lklhd_tif)) %>% 
+           str_replace('_', ' '))
+pol_df3 <- pol_df3 %>% left_join(fps, by = 'species')
+
+# pol_df3 %>% distinct(common_group, subgroup_a, subgroup_b)
+# pol_df3 %>% distinct(common_group, subgroup_a)
+
+# Get file list for given group
+pol_group <- 'Moscas'
+pol_group <- 'Murcielagos'
+subgrp_a <- ''
+apis_code <- ''
+
+name <- str_c(str_to_title(str_sub(c(pol_group, subgrp_a), end=4)), collapse = '')
+
+sub_df <- pol_df3 %>% 
+  filter(common_group == pol_group, !is.na(lklhd_tif))
+
+if(subgrp_a != '') {
+  sub_df <- sub_df %>% 
+    filter(str_detect(subgroup_a, regex(subgrp_a, ignore_case = TRUE))) 
 }
 
-# List TIFs and filter to species list
-fps <- list.files(file.path(pred_dir, 'likelihood'), 'tif$', full.name=T)
-sp_fps <- sp_nospc_list %>% 
-  map(~str_subset(.y, str_glue("{.x}.tif")), fps) %>% 
-  flatten_chr()
+sp_fps <- sub_df %>% 
+  dplyr::select(lklhd_tif) %>% 
+  deframe()
 
+# Sum likelihood rasters
 if(length(sp_fps) > 0) {
   
   rich_fn <- str_glue('richness_{name}_{rf_name}_{length(sp_fps)}species{apis_code}_lkhd')
-  rich_plot_fp <- file.path(rf_fig_dir, str_glue('{rich_fn}.png'))
-  rich_tif_fp <- file.path(pred_dir, str_glue('{rich_fn}.tif'))
+  rich_plot_fp <- file.path(rf_fig_dir, 'richness', str_glue('{rich_fn}.png'))
+  rich_tif_fp <- file.path(pred_dir, 'richness',  str_glue('{rich_fn}.tif'))
   
-  stack_sdms(sp_fps, rich_tif_fp, rich_plot_fp, mex)
+  stack_sdms_terra(sp_fps, rich_tif_fp, rich_plot_fp, mex)
   
 }
+
+# Perform for all (group_by) ----
+pol_df4 <- pol_df3 %>%
+  mutate(solitaria = str_detect(subgroup_a, regex('solitaria', ignore_case = TRUE)),
+         social = str_detect(subgroup_a, regex('social', ignore_case = TRUE)),
+         eusocial = str_detect(subgroup_a, regex('eusocial', ignore_case = TRUE)),
+         diurna =  str_detect(subgroup_a, regex('diurna', ignore_case = TRUE)),
+         nocturna = str_detect(subgroup_a, regex('nocturna', ignore_case = TRUE)))
+
+pol_df4 %>% 
+  group_by(common_group, solitaria) %>% 
+  nest() %>% 
+  ungroup()
+
+row <- pol_df4 %>% slice(1)
+
+ 
+# pol_df4 %>% #tbl_vars()
+#   filter(common_group == pol_group, !is.na(lklhd_tif)) %>% 
+#   pivot_longer(cols = contains(subgroup_a)) %>% 
+#   filter(value) %>% 
+#   dplyr::select(lklhd_tif, value)
 
 # Sum presence/absence maps ----
 # Use raster package
