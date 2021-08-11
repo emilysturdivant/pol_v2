@@ -23,8 +23,10 @@ library('tidyverse')
 unq_cells = TRUE
 mutually_exclusive_pa = TRUE
 nspecies <- 15
-rf_vers <- 1
-contin_vars_only <- TRUE
+rf_vers <- 3
+contin_vars_only <- FALSE
+# rf_vers <- 4
+# unq_cells = FALSE
 
 # Date range
 filt_dates = FALSE
@@ -59,8 +61,7 @@ model_species_rf <- function(sp_df,
                              pred_dir,
                              sp_name,
                              mutually_exclusive_pa=TRUE,
-                             unq_cells=TRUE,
-                             rf_fig_dir=NULL) {
+                             unq_cells=TRUE) {
   
   # File paths
   sp_nospc <- str_replace(sp_name, ' ', '_')
@@ -93,19 +94,15 @@ model_species_rf <- function(sp_df,
     dplyr::select(lon, lat)
   
   # Background points
-  pres_pts <- as_Spatial(sp_df)
-  
-  set.seed(10)
   if(mutually_exclusive_pa) {
-    
+    pres_pts <- as_Spatial(sp_df)
+    set.seed(10)
     backg <- dismo::randomPoints(mask = pred, n=1000, p = pres_pts
                           # prob = T, # use mask as sampling bias grid
     )
     
-    # bg <- spatSample(pred, 1000, "random", na.rm = TRUE, xy = TRUE)
-    
   } else {
-    
+    set.seed(10)
     backg <- dismo::randomPoints(pred, n=1000) 
   }
   
@@ -143,8 +140,11 @@ model_species_rf <- function(sp_df,
   envtrain <- envtrain1 %>% dplyr::select(-cells)
   
   # Exit if there are fewer than 25 true presence points in the training set.
-  if(nrow(filter(envtrain, pa == 1)) < 25) return()
-            
+  if(nrow(filter(envtrain, pa == 1)) < 25) {
+    print('Fewer than 25 true non-duplicated presence points in the training set')
+    return()
+  }
+  
   # Testing datasets - get predictors for test presence and background points
   testpres <- data.frame( raster::extract(pred, test_1) ) %>%
     mutate(across(starts_with(c('biomes', 'ESA', 'usv')), as.factor))
@@ -155,8 +155,18 @@ model_species_rf <- function(sp_df,
   # Set factor levels for test DFs to match training data
   vars <- envtrain %>% dplyr::select(where(is.factor)) %>% tbl_vars
   for(var in vars){
-    levels(testpres[[var]]) <- levels(envtrain[[var]])
-    levels(testbackg[[var]]) <- levels(envtrain[[var]])
+    levs <- tribble(~name, ~levels,
+                    'train', levels(envtrain[[var]]),
+                    'testb', levels(testbackg[[var]]), 
+                    'testp', levels(testpres[[var]])) %>% 
+      mutate(n =  purrr::map_dbl(levels, length))
+    
+    longest_levels <- levs %>% slice_max(n) %>% 
+      dplyr::select(levels) %>% flatten %>% deframe
+    
+    levels(testpres[[var]]) <- longest_levels
+    levels(testbackg[[var]]) <- longest_levels
+    levels(envtrain[[var]]) <- longest_levels
   }
   
   # Random forest model
@@ -375,7 +385,7 @@ stack_sdms_terra <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   
   temp_dir <- file.path(dirname(rich_tif_fp), 'temp')
   unlink(temp_dir, recursive = TRUE)
-  dir.create(temp_dir)
+  dir.create(temp_dir, recursive = TRUE)
   
   for(i in idx) {
     fps_sub <- sp_fps[i:(i+interval-1)]
@@ -411,6 +421,7 @@ stack_sdms_terra <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
     theme(legend.position = c(.95, 1), 
           legend.title.align = 0,
           legend.justification = c(1,1),
+          plot.background = element_rect(fill = 'white'),
           panel.grid = element_blank(),
           axis.title = element_blank(),
           axis.text = element_blank())
@@ -637,7 +648,6 @@ pol_df2 <- pol_df2 %>%
 #   deframe
 # sp_nospc_list <- str_replace(sp_list, ' ', '_')
 
-# ~ RF model for each species ----
 # Load environment variables ----
 crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
 predictors <- raster::stack(list.files(crop_dir, 'tif$', full.names=T))
@@ -657,10 +667,12 @@ pred <- predictors[[- which(names(predictors) %in% drop_lst) ]]
 # Set extent for testing
 ext <- raster::extent(mex)
 
+# ~ RF model for each species ----
 # Model each species
-df <- pol_df2 %>% filter(common_group == 'Moscas')
+save_pts <- FALSE
+df <- pol_df2 #%>% filter(common_group == 'Moscas')
 stop <- nrow(df)
-for (i in seq(1, stop)) {
+for (i in seq(258, stop)) {
   
   # Get data
   sp_dat <- df %>% slice(i)
@@ -672,9 +684,12 @@ for (i in seq(1, stop)) {
   sp_df <- sp_dat$data[[1]]
   
   # Save points
-  pts_fp <- file.path(pred_dir, 'species_points', str_c(sp_nospc, '.gpkg'))
-  if(!file.exists(pts_fp)) sp_df %>% st_write(pts_fp)
-  
+  if(save_pts) {
+    pts_fp <- file.path(pred_dir, 'species_points', str_c(sp_nospc, '.gpkg'))
+    dir.create(dirname(pts_fp), recursive = TRUE, showWarnings = FALSE)
+    if(!file.exists(pts_fp)) sp_df %>% st_write(pts_fp)
+  }
+
   # Run random forest and model evaluation
   mod_rf <- model_species_rf(sp_df,
                           pred, 
@@ -734,7 +749,7 @@ pol_df3 <- pol_df2 %>% left_join(eval_tbl, by = 'species')
 
 # pngs for QC ----
 (sp_row <- pol_df2 %>% sample_n(1))
-# (sp_row <- pol_df2 %>% filter(species == 'Dysschema magdala'))
+(sp_row <- pol_df2 %>% filter(species == 'Alypiodes bimaculata'))
 (sp_row <- pol_df3 %>% arrange(auc) %>% slice(1))
 (sp_row <- pol_df3 %>% arrange(N_unq_cells) %>% slice(2))
 (sp_row <- pol_df3 %>% filter(N_unq_cells < 20) %>% sample_n(1))
@@ -742,85 +757,85 @@ pol_df3 <- pol_df2 %>% left_join(eval_tbl, by = 'species')
 plot_qc_maps(sp_row, rf_fig_dir)
 
 
-# Save TIFs of likelihood and presence/absence ----
-# filter filepaths to species list
-fps <- list.files(file.path(pred_dir, 'models'), '*.rds', full.names = T)
-sp_fps <- sp_nospc_list %>% 
-  map(~str_subset(.y, str_glue("{.x}.rds")), fps) %>% 
-  flatten_chr()
+# # Save TIFs of likelihood and presence/absence ----
+# # filter filepaths to species list
+# fps <- list.files(file.path(pred_dir, 'models'), '*.rds', full.names = T)
+# sp_fps <- sp_nospc_list %>% 
+#   map(~str_subset(.y, str_glue("{.x}.rds")), fps) %>% 
+#   flatten_chr()
+# 
+# for(rf_fp in sp_fps){
+#   
+#   # Filepaths  
+#   sp_nospc <- tools::file_path_sans_ext(basename(rf_fp))
+#   erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
+#   sp_name <- sp_nospc %>% str_replace('_', '')
+#   
+#   # Make TIFs of likelihood and presence/absence
+#   predict_distribution_rf(rf_fp, erf_fp, sp_name, pred_dir, ext, pred)
+#   
+# }
 
-for(rf_fp in sp_fps){
-  
-  # Filepaths  
-  sp_nospc <- tools::file_path_sans_ext(basename(rf_fp))
-  erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
-  sp_name <- sp_nospc %>% str_replace('_', '')
-  
-  # Make TIFs of likelihood and presence/absence
-  predict_distribution_rf(rf_fp, erf_fp, sp_name, pred_dir, ext, pred)
-  
-}
+# # Compare accuracy metrics by threshold ----
+# fps <- list.files(file.path(pred_dir, 'models'), '*.rds', full.names = T)
+# rf_fp <- fps[[10]]
+# sp_nospc <- tools::file_path_sans_ext(basename(rf_fp))
+# erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
+# erf <- readRDS(erf_fp)
+# 
+# c('spec_sens', 'kappa', 'no_omission', 'sensitivity') %>% 
+#   map_dfr(get_accuracy_metrics, erf)
 
-# Compare accuracy metrics by threshold ----
-fps <- list.files(file.path(pred_dir, 'models'), '*.rds', full.names = T)
-rf_fp <- fps[[10]]
-sp_nospc <- tools::file_path_sans_ext(basename(rf_fp))
-erf_fp <- file.path(pred_dir, 'model_evals', str_c(sp_nospc, '.rds'))
-erf <- readRDS(erf_fp)
-
-c('spec_sens', 'kappa', 'no_omission', 'sensitivity') %>% 
-  map_dfr(get_accuracy_metrics, erf)
-
-
-# pngs of likelihood maps ----
-fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif', full.names=T)
-
-# filter filepaths to species list
-sp_fps <- sp_nospc_list %>% 
-  map(~str_subset(.y, str_glue("{.x}.tif")), fps) %>% 
-  flatten_chr()
-
-# testing
-lklhd_fp <- fps[[1]]
-for (lklhd_fp in fps) {
-  
-  sp_nospc <- tools::file_path_sans_ext(basename(lklhd_fp))
-  
-  # Filepaths
-  plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_likelihood.png'))
-  dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
-  
-  # Get observation points
-  sp_dat <- pol_df2 %>% filter(str_detect(species, str_replace(sp_nospc, '_', ' ')))
-  sp_df <- sp_dat$data[[1]]
-  sp_ch <- sp_dat$convhull[[1]]
-  
-  # Plot
-  likelihood_plot <- plot_lklhd_map(lklhd_fp)
-  
-  # Add convex hull and presence points
-  like_plot <- likelihood_plot +
-    geom_sf(data = sp_ch, fill = "transparent", size = 0.2, color = "white") +
-    geom_sf(data = sp_df)
-  
-  # Save
-  ggsave(plot_fp, like_plot, width=9, height=5.7, dpi=120)
-  
-}
-
-# pngs of presence maps ----
-fps <- list.files(file.path(pred_dir, 'binned_spec_sens'), '*.tif', full.names=T)
-for (fp in fps) {
-  
-  # Filepaths
-  fn <- basename(fp)
-  sp_nospc <- tools::file_path_sans_ext(fn)
-  plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_bin_specsens.png'))
-  dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
-  
-  binned_map <- plot_binned_map(fp, binned_map)
-  
-}
+# 
+# # pngs of likelihood maps ----
+# fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif', full.names=T)
+# 
+# # filter filepaths to species list
+# sp_fps <- sp_nospc_list %>% 
+#   map(~str_subset(.y, str_glue("{.x}.tif")), fps) %>% 
+#   flatten_chr()
+# 
+# # testing
+# lklhd_fp <- fps[[1]]
+# for (lklhd_fp in fps) {
+#   
+#   sp_nospc <- tools::file_path_sans_ext(basename(lklhd_fp))
+#   
+#   # Filepaths
+#   plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_likelihood.png'))
+#   dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
+#   
+#   # Get observation points
+#   sp_dat <- pol_df2 %>% filter(str_detect(species, str_replace(sp_nospc, '_', ' ')))
+#   sp_df <- sp_dat$data[[1]]
+#   sp_ch <- sp_dat$convhull[[1]]
+#   
+#   # Plot
+#   likelihood_plot <- plot_lklhd_map(lklhd_fp)
+#   
+#   # Add convex hull and presence points
+#   like_plot <- likelihood_plot +
+#     geom_sf(data = sp_ch, fill = "transparent", size = 0.2, color = "white") +
+#     geom_sf(data = sp_df)
+#   
+#   # Save
+#   ggsave(plot_fp, like_plot, width=9, height=5.7, dpi=120)
+#   
+# }
+# 
+# # pngs of presence maps ----
+# fps <- list.files(file.path(pred_dir, 'binned_spec_sens'), '*.tif', full.names=T)
+# for (fp in fps) {
+#   
+#   # Filepaths
+#   fn <- basename(fp)
+#   sp_nospc <- tools::file_path_sans_ext(fn)
+#   plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_bin_specsens.png'))
+#   dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
+#   
+#   binned_map <- plot_binned_map(fp, binned_map)
+#   
+# }
 
 # ~ COMBINE Sum likelihood maps ----
 # Add filenames for likelihood tifs 
@@ -831,11 +846,10 @@ fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif$', full.names = T) %
 pol_df3 <- pol_df3 %>% left_join(fps, by = 'species')
 
 # pol_df3 %>% distinct(common_group, subgroup_a, subgroup_b)
-# pol_df3 %>% distinct(common_group, subgroup_a)
+pol_df3 %>% distinct(common_group, subgroup_a)
 
 # Get file list for given group
-pol_group <- 'Moscas'
-pol_group <- 'Murcielagos'
+pol_group <- 'Avispas'
 subgrp_a <- ''
 apis_code <- ''
 
@@ -864,7 +878,9 @@ if(length(sp_fps) > 0) {
   
 }
 
-# Perform for all (group_by) ----
+
+
+# IN PROGRESS - Perform for all (group_by) ----
 pol_df4 <- pol_df3 %>%
   mutate(solitaria = str_detect(subgroup_a, regex('solitaria', ignore_case = TRUE)),
          social = str_detect(subgroup_a, regex('social', ignore_case = TRUE)),
