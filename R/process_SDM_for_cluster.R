@@ -1,5 +1,5 @@
 
-# setwd('/share/Part1/esturdivant/pol_v2')
+setwd('/share/Part1/esturdivant/pol_v2')
 
 # Initialize
 source('R/initialize.R')
