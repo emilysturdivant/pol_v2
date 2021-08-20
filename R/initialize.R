@@ -64,6 +64,43 @@ mex0 <- st_union(mex)
 ext <- raster::extent(mex)
 
 # Functions ----
+
+prep_predictor_stack <- function(pred_grd, crop_dir, vars, mex0, overwrite = FALSE) {
+  
+  # Laad raster and return if it already exists
+  if(file.exists(pred_grd) & !overwrite) {
+    return(raster::stack(pred_grd))
+  }
+  
+  # List variables for removal
+  drop_lst <- c('biomes_CVEECON2', 'biomes_CVEECON1', 'biomes_CVEECON4',
+                'ESACCI.LC.L4.LC10.Map.10m.MEX_2016_2018', 
+                'usv250s6gw_USV_SVI')
+  
+  # Include categorical layers for removal
+  if(!'biom' %in% vars) drop_lst <- c(drop_lst, 'biomes_CVEECON3')
+  if(!'lc' %in% vars)   drop_lst <- c(drop_lst, 'ESACCI.LC.L4.LCCS.Map.300m.P1Y.2015.v2.0.7cds')
+  
+  # List files to include
+  fps <- list.files(crop_dir, 'tif$', full.names=T)
+  drop_fps <- drop_lst %>% purrr::map_chr(~ str_subset(fps, .x))
+  fps <- fps[!(fps %in% drop_fps)]
+  
+  # Use raster
+  mex0r <- raster::rasterize(as_Spatial(mex0), raster::raster(fps[[1]]))
+  pred <- raster::stack(fps) %>% raster::mask(mex0r)
+  names(pred) <- names(pred) %>% 
+    str_remove_all('wc2\\.1_30s_') %>% 
+    str_replace('ESA.*', 'landcover') %>% 
+    str_replace('MEX_msk_alt', 'elevation')
+  
+  # Save for next time
+  pred %>% writeRaster(pred_grd, overwrite = overwrite)
+  
+  # Return
+  return(pred)
+}
+
 #' @export
 model_species_rf <- function(sp_df,
                              pred, 
