@@ -40,6 +40,7 @@ get_pred_dir <- function(unq_cells = TRUE,
 }
 
 # directory paths ----
+var_code <- str_c(c( str_to_title(vars)), collapse = '')
 (pred_dir <- get_pred_dir(unq_cells = unq_cells,
                          excludep = excludep,
                          rf_vers = rf_vers,
@@ -141,7 +142,7 @@ model_species_rf <- function(sp_df,
   
   # Exit if there are fewer than 25 true presence points in the training set.
   if(nrow(filter(envtrain, pa == 1)) < 25) {
-    print('Fewer than 25 true non-duplicated presence points in the training set')
+    print(str_c(sp_name, ': Fewer than 25 true non-duplicated presence points in the training set'))
     return(list(rf = NA, erf = NA))
   }
   
@@ -252,6 +253,11 @@ predict_distribution_rf <- function(rf_list,
                          str_glue(sp_nospc, '.tif'))
   
   if(file.exists(likelihood_fp) & (file.exists(binned_fp) | !write_binned)) {
+    if(!write_binned) {
+      print(str_c(likelihood_fp, ' already exists.'))
+    } else {
+      print(str_c(likelihood_fp, ' and ', binned_fp, ' already exist.'))
+    }
     return(likelihood_fp)
   } 
   
@@ -261,6 +267,7 @@ predict_distribution_rf <- function(rf_list,
     if(is.character(rf)){
       rf <- readRDS(rf)
     } else if (is.na(rf)) {
+      print(str_c(sp_name, ': NA provided for model.'))
       return(NA)
     }
     
@@ -285,6 +292,7 @@ predict_distribution_rf <- function(rf_list,
     
   } else {
     # If likelihood tiff already exists and we don't need to create the binary...
+    print(str_c(likelihood_fp, ' already exists and binary not requested.'))
     return(likelihood_fp)
   }
   

@@ -1,5 +1,5 @@
 
-setwd('/share/Part1/esturdivant/pol_v2')
+# setwd('/share/Part1/esturdivant/pol_v2')
 
 # Initialize
 source('R/initialize.R')
@@ -28,10 +28,28 @@ fps <- fps[!(fps %in% drop_fps)]
 # Use raster
 mex0r <- raster::rasterize(as_Spatial(mex0), raster::raster(fps[[1]]))
 pred <- raster::stack(fps) %>% raster::mask(mex0r)
+names(pred) <- names(pred) %>% 
+  str_remove_all('wc2\\.1_30s_') %>% 
+  str_replace('ESA.*', 'landcover') %>% 
+  str_replace('MEX_msk_alt', 'elevation')
+
+# pred_tif <- file.path('data/tidy/environment_variables', str_c('pred_', var_code, '.tif'))
+# pred %>% writeRaster(pred_tif)
+# pred2 <- raster::stack(pred_tif)
+# 
+# pred_ncdf <- file.path('data/tidy/environment_variables', str_c('pred_', var_code, '.nc'))
+# pred %>% writeRaster(pred_ncdf, overwrite = TRUE, zname = 'Name')
+# pred2 <- raster::stack(pred_ncdf)
+# 
+# pred_ncdf <- file.path('data/tidy/environment_variables', str_c('pred2_', var_code, '.nc'))
+# predb <- raster::brick(pred)
+# names(predb) <- names(pred)
+# predb %>% writeRaster(pred_ncdf, varname = names(predb))
+# pred2 <- raster::stack(pred_ncdf)
 
 # RF model for each species ----
 pol_df3 <- pol_df2 %>% 
-  slice(1:3) %>% 
+  slice(110:120) %>% 
   mutate(
     mod_fp = purrr::map2(
       data, species, 
