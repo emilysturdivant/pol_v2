@@ -1,15 +1,15 @@
-
-setwd('/share/Part1/esturdivant/pol_v2')
-
-# Initialize
-# source('R/initialize.R')
-pts_dir <- 'data/tidy/pollinator_points'
-# Load filtered points ----
-filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
-pol_df2 <- readRDS(filt_pts_rds) %>% 
-  filter(genus != "", species != "") %>% 
-  filter(!is.na(genus), !is.na(species))
-print('End of test')
+print(getwd())
+# setwd('/share/Part1/esturdivant/pol_v2')
+# 
+# # Initialize
+# # source('R/initialize.R')
+# pts_dir <- 'data/tidy/pollinator_points'
+# # Load filtered points ----
+# filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
+# pol_df2 <- readRDS(filt_pts_rds) %>% 
+#   filter(genus != "", species != "") %>% 
+#   filter(!is.na(genus), !is.na(species))
+# print('End of test')
 # # Load environment variables ----
 # # List variables for removal
 # drop_lst <- c('biomes_CVEECON2', 'biomes_CVEECON1', 'biomes_CVEECON4',
