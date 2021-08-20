@@ -49,7 +49,7 @@ names(pred) <- names(pred) %>%
 
 # RF model for each species ----
 pol_df3 <- pol_df2 %>% 
-  slice(110:120) %>% 
+  slice(120:140) %>% 
   mutate(
     mod_fp = purrr::map2(
       data, species, 
