@@ -2,8 +2,8 @@
 setwd('/share/Part1/esturdivant/pol_v2')
 
 # Initialize
-source('R/initialize.R')
-
+# source('R/initialize.R')
+pts_dir <- 'data/tidy/pollinator_points'
 # Load filtered points ----
 filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
 pol_df2 <- readRDS(filt_pts_rds) %>% 
