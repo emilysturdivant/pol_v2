@@ -178,10 +178,10 @@ model_species_rf <- function(sp_df,
   envtrain <- envtrain1 %>% dplyr::select(-cells)
   
   # Exit if there are fewer than 25 true presence points in the training set.
-  if(nrow(filter(envtrain, pa == 1)) < 25) {
-    print(str_c(sp_name, ': Fewer than 25 true non-duplicated presence points in the training set'))
-    return(list(rf = NA, erf = NA))
-  }
+  # if(nrow(filter(envtrain, pa == 1)) < 25) {
+  #   print(str_c(sp_name, ': Fewer than 25 true non-duplicated presence points in the training set'))
+  #   return(list(rf = NA, erf = NA))
+  # }
   
   # Testing datasets - get predictors for test presence and background points
   testpres <- data.frame( raster::extract(pred, test_1) ) %>%
@@ -263,6 +263,7 @@ model_species_rf <- function(sp_df,
   }
   
   # Return
+  print(str_c(sp_name, ': Modeling completed.'))
   if(return_obj == 'paths') {
     return(list(rf=model_fp, erf=erf_fp))
   }
