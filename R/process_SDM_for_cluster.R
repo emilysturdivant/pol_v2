@@ -15,8 +15,15 @@ pred_grd <- file.path('data/tidy/environment_variables', str_c('pred_', var_code
 pred <- prep_predictor_stack(pred_grd, crop_dir, vars, mex0, overwrite = TRUE)
 
 # RF model for each species ----
-pol_df3 <- pol_df2 %>% 
-  slice(120:122) %>% 
+# Add filenames for likelihood tifs 
+fps <- list.files(file.path(pred_dir, 'models'), '*.rds$', full.names = T) %>% 
+  as_tibble_col('mod_fp') %>% 
+  mutate(species = basename(tools::file_path_sans_ext(mod_fp)) %>% 
+           str_replace('_', ' '))
+pol_df3 <- pol_df2 %>% left_join(fps, by = 'species')
+pol_df3 <- pol_df3 %>% 
+  filter(is.na(mod_fp)) %>% 
+  # slice(200:600) %>% 
   mutate(
     mod_fp = purrr::map2(
       data, species, 
