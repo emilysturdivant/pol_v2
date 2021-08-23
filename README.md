@@ -1,6 +1,6 @@
 # Pollinators of Mexico
 
-Renovated processing for pollinators of Mexico project (new version of repo [polinizadores](https://github.com/emilysturdivant/polinizadores))
+Exploring the dynamic between pollinators and conservation land. This is a new and reduced version of the processing in [polinizadores](https://github.com/emilysturdivant/polinizadores).
 
 ### Inputs:
 
