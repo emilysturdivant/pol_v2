@@ -6,10 +6,11 @@
 source('R/initialize.R')
 
 # Load filtered points ----
-filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
 pol_df2 <- readRDS(filt_pts_rds) %>% 
   filter(genus != "", species != "") %>% 
   filter(!is.na(genus), !is.na(species))
+
+dat <- readRDS(pts_nested_rds)
 
 # Look at model statistics together
 fps <- list.files(file.path(pred_dir, 'model_evals'), '*.csv$', full.names = T)
@@ -30,8 +31,8 @@ pol_df3 <- pol_df2 %>% left_join(eval_tbl, by = 'species')
 (sp_row <- pol_df3 %>% arrange(N_unq_cells) %>% slice(6))
 (sp_row <- pol_df3 %>% filter(N_unq_cells < 20) %>% sample_n(1))
 
-dir.create(file.path(rf_fig_dir, 'map_predictions'), recursive = T, showWarnings = F)
-plot_qc_maps(sp_row, file.path(rf_fig_dir, 'map_predictions'))
+dir.create(file.path(pred_dir, 'map_predictions'), recursive = T, showWarnings = F)
+plot_qc_maps(sp_row, file.path(pred_dir, 'map_predictions'))
 
 # # Compare accuracy metrics by threshold ----
 # fps <- list.files(file.path(pred_dir, 'models'), '*.rds', full.names = T)
@@ -59,7 +60,7 @@ plot_qc_maps(sp_row, file.path(rf_fig_dir, 'map_predictions'))
 #   sp_nospc <- tools::file_path_sans_ext(basename(lklhd_fp))
 #   
 #   # Filepaths
-#   plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_likelihood.png'))
+#   plot_fp <- file.path(pred_dir, 'map_predictions', str_c(sp_nospc, '_likelihood.png'))
 #   dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
 #   
 #   # Get observation points
@@ -87,7 +88,7 @@ plot_qc_maps(sp_row, file.path(rf_fig_dir, 'map_predictions'))
 #   # Filepaths
 #   fn <- basename(fp)
 #   sp_nospc <- tools::file_path_sans_ext(fn)
-#   plot_fp <- file.path(rf_fig_dir, 'map_predictions', str_c(sp_nospc, '_bin_specsens.png'))
+#   plot_fp <- file.path(pred_dir, 'map_predictions', str_c(sp_nospc, '_bin_specsens.png'))
 #   dir.create(dirname(plot_fp), recursive = T, showWarnings = F)
 #   
 #   binned_map <- plot_binned_map(fp, binned_map)
@@ -102,8 +103,8 @@ fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif$', full.names = T) %
            str_replace('_', ' '))
 pol_df3 <- pol_df3 %>% left_join(fps, by = 'species')
 
-# pol_df3 %>% distinct(common_group, subgroup_a, subgroup_b)
-pol_df3 %>% distinct(common_group, subgroup_a)
+# pol_df3 %>% distinct(group, bee_sociality, bee_nesting)
+pol_df3 %>% distinct(group)
 
 # Get file list for given group
 pol_group <- 'Abejas'
@@ -113,7 +114,7 @@ apis_code <- ''
 name <- str_c(str_to_title(str_sub(c(pol_group, subgrp_a), end=4)), collapse = '')
 
 sub_df <- pol_df3 %>% 
-  filter(common_group == pol_group, !is.na(lklhd_tif))
+  filter(grupo == pol_group, !is.na(lklhd_tif))
 
 if(subgrp_a != '') {
   sub_df <- sub_df %>% 
@@ -128,7 +129,7 @@ sp_fps <- sub_df %>%
 if(length(sp_fps) > 0) {
   
   rich_fn <- str_glue('richness_{name}_rf{rf_vers}_{length(sp_fps)}species{apis_code}_lkhd')
-  rich_plot_fp <- file.path(rf_fig_dir, 'richness', str_glue('{rich_fn}.png'))
+  rich_plot_fp <- file.path(pred_dir, 'richness', str_glue('{rich_fn}.png'))
   rich_tif_fp <- file.path(pred_dir, 'richness',  str_glue('{rich_fn}.tif'))
   
   stack_sdms_terra(sp_fps, rich_tif_fp, rich_plot_fp, mex)
@@ -146,14 +147,14 @@ pol_df4 <- pol_df3 %>%
          nocturna = str_detect(subgroup_a, regex('nocturna', ignore_case = TRUE)))
 
 pol_df4 %>% 
-  group_by(common_group, solitaria) %>% 
+  group_by(grupo, solitaria) %>% 
   nest() %>% 
   ungroup()
 
 row <- pol_df4 %>% slice(1)
 
 pol_df4 %>% #tbl_vars()
-  filter(common_group == pol_group, !is.na(lklhd_tif)) %>%
+  filter(grupo == pol_group, !is.na(lklhd_tif)) %>%
   pivot_longer(cols = contains(subgrp_a)) %>%
   filter(value) %>%
   dplyr::select(lklhd_tif)

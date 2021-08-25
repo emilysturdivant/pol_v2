@@ -8,10 +8,11 @@ if(sysinfo[['nodename']] == 'lanase.cluster') {
 
 # Initialize
 source('R/initialize.R')
+save_pts <- FALSE
 
 # Load filtered points ----
-filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
-pol_df2 <- readRDS(filt_pts_rds) %>% 
+pol_df2 <- readRDS(filt_pts_rds) 
+pol_df2 <- pol_df2 %>% 
   filter(genus != "", species != "") %>% 
   filter(!is.na(genus), !is.na(species))
 
@@ -28,7 +29,7 @@ fps <- list.files(file.path(pred_dir, 'models'), '*.rds$', full.names = T) %>%
 pol_df3 <- pol_df2 %>% 
   left_join(fps, by = 'species') %>% 
   filter(is.na(mod_fp)) %>% 
-  slice(1:5) %>%
+  slice(1:15) %>%
   mutate(
     mod_fp = purrr::map2(
       data, species, 
@@ -66,7 +67,6 @@ pol_df4b %>%
   filter()
 
 # Optionally save points ----
-save_pts <- FALSE
 if(save_points) {
   
   # Save species points in separate gpk and add filepath to df
