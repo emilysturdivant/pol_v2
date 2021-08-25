@@ -1,8 +1,10 @@
-# v2: using GBIF points that I downloaded
-# Input: points downloaded from GBIF in folder input_data/GBIF/family_order_query
-# Output: files in folder for current iteration of RF: data_out/sdm/rfX_params/query_term
+# Este código tiene los parametros y las funciones que usan los demás procesos. 
+# Los otro códigos corren este al principio con la línea:
+# source('R/initialize.R')
 
 # Load libraries ----
+library('tools')
+library('taxize')
 library('patchwork')
 library('terra')
 library('dismo')
@@ -12,16 +14,26 @@ library('sf')
 library('tidyverse')
 library('purrr')
 
-# Parameters ----
+# Observation filtering parameters ----
+max_coord_uncertainty <- 1000
+
+# Model parameters ----
+rf_vers <- 4
 unq_cells = TRUE
 excludep = TRUE
-rf_vers <- 4
 contin_vars_only <- TRUE
 contin_vars_and_lc <- TRUE
 vars <- c('lc', 'alt', 'wc')
 filt_dates = FALSE
 date_range <- c(2000, 2020)
 
+# Directory paths ----
+# Pre-processed points
+pts_dir <- 'data/tidy/pollinator_points'
+pts_nested_rds <- file.path(pts_dir, 'points_nested_species.rds')
+filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
+
+# Predictor layers 
 # Function to create pred_dir path
 get_pred_dir <- function(unq_cells = TRUE,
                          excludep = TRUE,
@@ -39,17 +51,15 @@ get_pred_dir <- function(unq_cells = TRUE,
   file.path('data', 'data_out', fp_tail)
 }
 
-# directory paths ----
+# Paths
 var_code <- str_c(c( str_to_title(vars)), collapse = '')
 (pred_dir <- get_pred_dir(unq_cells = unq_cells,
                          excludep = excludep,
                          rf_vers = rf_vers,
                          vars = vars,
                          filt_dates = filt_dates))
-rf_fig_dir <- pred_dir
 dir.create(pred_dir, recursive=T, showWarnings = F)
 
-pts_dir <- 'data/tidy/pollinator_points'
 
 # Environment variables
 crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
@@ -64,7 +74,6 @@ mex0 <- st_union(mex)
 ext <- raster::extent(mex)
 
 # Functions ----
-
 prep_predictor_stack <- function(pred_grd, crop_dir, vars, mex0, overwrite = FALSE) {
   
   # Laad raster and return if it already exists
@@ -435,7 +444,7 @@ stack_sdms <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   #   facet_wrap(~ variable, nrow=3)
   # 
   # # Save
-  # ggsave(file.path(rf_fig_dir, str_glue('Likhd_{nlayers(pol_stack)}species.png')), pa_facets, width=9, height=5)
+  # ggsave(file.path(pred_dir, str_glue('Likhd_{nlayers(pol_stack)}species.png')), pa_facets, width=9, height=5)
   
 }
 
@@ -503,7 +512,7 @@ stack_sdms_terra <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   #   facet_wrap(~ variable, nrow=3)
   # 
   # # Save
-  # ggsave(file.path(rf_fig_dir, str_glue('Likhd_{nlayers(pol_stack)}species.png')), pa_facets, width=9, height=5)
+  # ggsave(file.path(pred_dir, str_glue('Likhd_{nlayers(pol_stack)}species.png')), pa_facets, width=9, height=5)
   
 }
 
