@@ -12,12 +12,11 @@ save_pts <- FALSE
 
 # Load filtered points ----
 pol_df2 <- readRDS(filt_pts_rds) 
-pol_df2 <- pol_df2 %>% 
-  filter(genus != "", species != "") %>% 
-  filter(!is.na(genus), !is.na(species))
 
 # Load environment variables ----
 pred_grd <- file.path('data/tidy/environment_variables', str_c('pred_', var_code, '.grd'))
+mex <- st_read(mex_fp)
+mex0 <- st_union(mex)
 pred <- prep_predictor_stack(pred_grd, crop_dir, vars, mex0, overwrite = FALSE)
 
 # RF model for each species ----
@@ -29,7 +28,7 @@ fps <- list.files(file.path(pred_dir, 'models'), '*.rds$', full.names = T) %>%
 pol_df3 <- pol_df2 %>% 
   left_join(fps, by = 'species') %>% 
   filter(is.na(mod_fp)) %>% 
-  slice(1:15) %>%
+  # slice(1:113) %>%
   mutate(
     mod_fp = purrr::map2(
       data, species, 

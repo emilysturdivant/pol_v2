@@ -6,14 +6,11 @@
 source('R/initialize.R')
 
 # Load filtered points ----
-pol_df2 <- readRDS(filt_pts_rds) %>% 
-  filter(genus != "", species != "") %>% 
-  filter(!is.na(genus), !is.na(species))
+pol_df2 <- readRDS(filt_pts_rds)
 
 dat <- readRDS(pts_nested_rds)
 
-# Look at model statistics together
-fps <- list.files(file.path(pred_dir, 'model_evals'), '*.csv$', full.names = T)
+# Look at model statistics together ----
 eval_tbl_fp <- file.path(pred_dir, str_c('model_evals_', length(fps), 'species.csv'))
 if(!file.exists(eval_tbl_fp)){
   if(length(fps) > 0) {
@@ -21,15 +18,89 @@ if(!file.exists(eval_tbl_fp)){
     eval_tbl %>% write_csv(eval_tbl_fp)
   }
 }
+
+# Get filepath for model_evals table with most species
+eval_tbl_fp <- list.files(pred_dir, 'model_evals.*\\.csv$', full.names = T) %>% 
+    as_tibble_col() %>% 
+    mutate(ct = as.integer(str_extract_all(value, '\\d+(?=species)'))) %>% 
+    slice_max(ct) %>% 
+    nth(1)
 eval_tbl <- read_csv(eval_tbl_fp)
 pol_df3 <- pol_df2 %>% left_join(eval_tbl, by = 'species')
 
+# ~ Sum likelihood maps ----
+# Add filenames for likelihood tifs 
+fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif$', full.names = T) %>% 
+  as_tibble_col('lklhd_tif') %>% 
+  mutate(species = basename(tools::file_path_sans_ext(lklhd_tif)) %>% 
+           str_replace('_', ' '))
+pol_df3 <- pol_df3 %>% left_join(fps, by = 'species')
+
+# Sum richness for each pollinator group ----
+iterate_stack_sdms <- function(fps, name, mex) {
+  
+  # Load reference polygons
+  if(is.character(mex)) mex <- st_read(mex)
+  # mex <- st_read(mex_fp)
+  
+  fps <- fps[[1]]
+  
+  # Output filenames
+  rich_fn <- str_glue('richness_{name}_rf{rf_vers}_{length(fps)}species_lkhd')
+  rich_plot_fp <- file.path(pred_dir, 'richness', str_glue('{rich_fn}.png'))
+  rich_tif_fp <- file.path(pred_dir, 'richness',  str_glue('{rich_fn}.tif'))
+  
+  # Sum likelihood rasters
+  stack_sdms(fps, rich_tif_fp, rich_plot_fp, mex)
+}
+
+# Create nested DF
+pol_nested <- pol_df3 %>% 
+  select(group, lklhd_tif) %>% 
+  group_by(group) %>% 
+  nest(fps = c(lklhd_tif)) %>% 
+  ungroup()
+
+purrr::walk2(pol_nested$data, pol_nested$group, iterate_stack_sdms, mex)
+
+
+# pol_df3 %>% distinct(group, bee_sociality, bee_nesting)
+pol_df3 %>% distinct(group)
+
+sp_fps <- pol_df3 %>% 
+  filter(group == 'bee', !is.na(lklhd_tif)) %>% 
+  dplyr::select(lklhd_tif) %>% 
+  deframe()
+
+# Create nested DF
+pol_nested <- pol_df3 %>% 
+  filter(!is.na(bee_sociality)) %>% 
+  select(bee_sociality, lklhd_tif) %>% 
+  group_by(bee_sociality) %>% 
+  nest(fps = c(lklhd_tif)) %>% 
+  ungroup()
+
+purrr::walk2(pol_nested$fps, pol_nested$bee_sociality, iterate_stack_sdms, mex)
+
+# Create nested DF
+pol_nested <- pol_df3 %>% 
+  filter(!is.na(bee_nesting)) %>% 
+  select(bee_nesting, lklhd_tif) %>% 
+  group_by(bee_nesting) %>% 
+  nest(fps = c(lklhd_tif)) %>% 
+  ungroup()
+
+purrr::walk2(pol_nested$fps, pol_nested$bee_nesting, iterate_stack_sdms, mex)
+
+
+
+
 # pngs for QC ----
-(sp_row <- pol_df2 %>% sample_n(1))
-(sp_row <- pol_df2 %>% filter(species == 'Alypiodes bimaculata'))
+(sp_row <- pol_df3 %>% sample_n(1))
+(sp_row <- pol_df3 %>% filter(species == 'Alypiodes bimaculata'))
 (sp_row <- pol_df3 %>% arrange(auc) %>% slice(1))
-(sp_row <- pol_df3 %>% arrange(N_unq_cells) %>% slice(6))
-(sp_row <- pol_df3 %>% filter(N_unq_cells < 20) %>% sample_n(1))
+(sp_row <- pol_df3 %>% slice_max(N_unq_cells, n = 6) %>% sample_n(1))
+(sp_row <- pol_df3 %>% filter(N_unq_cells < 25) %>% sample_n(1))
 
 dir.create(file.path(pred_dir, 'map_predictions'), recursive = T, showWarnings = F)
 plot_qc_maps(sp_row, file.path(pred_dir, 'map_predictions'))
@@ -94,68 +165,4 @@ plot_qc_maps(sp_row, file.path(pred_dir, 'map_predictions'))
 #   binned_map <- plot_binned_map(fp, binned_map)
 #   
 # }
-
-# ~ COMBINE Sum likelihood maps ----
-# Add filenames for likelihood tifs 
-fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif$', full.names = T) %>% 
-  as_tibble_col('lklhd_tif') %>% 
-  mutate(species = basename(tools::file_path_sans_ext(lklhd_tif)) %>% 
-           str_replace('_', ' '))
-pol_df3 <- pol_df3 %>% left_join(fps, by = 'species')
-
-# pol_df3 %>% distinct(group, bee_sociality, bee_nesting)
-pol_df3 %>% distinct(group)
-
-# Get file list for given group
-pol_group <- 'Abejas'
-subgrp_a <- 'solitaria'
-apis_code <- ''
-
-name <- str_c(str_to_title(str_sub(c(pol_group, subgrp_a), end=4)), collapse = '')
-
-sub_df <- pol_df3 %>% 
-  filter(grupo == pol_group, !is.na(lklhd_tif))
-
-if(subgrp_a != '') {
-  sub_df <- sub_df %>% 
-    filter(str_detect(subgroup_a, regex(subgrp_a, ignore_case = TRUE))) 
-}
-
-sp_fps <- sub_df %>% 
-  dplyr::select(lklhd_tif) %>% 
-  deframe()
-
-# Sum likelihood rasters
-if(length(sp_fps) > 0) {
-  
-  rich_fn <- str_glue('richness_{name}_rf{rf_vers}_{length(sp_fps)}species{apis_code}_lkhd')
-  rich_plot_fp <- file.path(pred_dir, 'richness', str_glue('{rich_fn}.png'))
-  rich_tif_fp <- file.path(pred_dir, 'richness',  str_glue('{rich_fn}.tif'))
-  
-  stack_sdms_terra(sp_fps, rich_tif_fp, rich_plot_fp, mex)
-  
-}
-
-
-
-# IN PROGRESS - Perform for all (group_by) ----
-pol_df4 <- pol_df3 %>%
-  mutate(solitaria = str_detect(subgroup_a, regex('solitaria', ignore_case = TRUE)),
-         social = str_detect(subgroup_a, regex('social', ignore_case = TRUE)),
-         eusocial = str_detect(subgroup_a, regex('eusocial', ignore_case = TRUE)),
-         diurna =  str_detect(subgroup_a, regex('diurna', ignore_case = TRUE)),
-         nocturna = str_detect(subgroup_a, regex('nocturna', ignore_case = TRUE)))
-
-pol_df4 %>% 
-  group_by(grupo, solitaria) %>% 
-  nest() %>% 
-  ungroup()
-
-row <- pol_df4 %>% slice(1)
-
-pol_df4 %>% #tbl_vars()
-  filter(grupo == pol_group, !is.na(lklhd_tif)) %>%
-  pivot_longer(cols = contains(subgrp_a)) %>%
-  filter(value) %>%
-  dplyr::select(lklhd_tif)
 

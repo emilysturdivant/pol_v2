@@ -15,17 +15,15 @@ library('tidyverse')
 library('purrr')
 
 # Observation filtering parameters ----
-max_coord_uncertainty <- 1000
+max_coord_uncertainty <- 1000 # filter to coordinateUncertaintyInMeters < x
+filt_dates = FALSE            # filter observations to date range?  
+date_range <- c(2000, 2020)   # date range if filt_dates == TRUE
 
 # Model parameters ----
-rf_vers <- 4
-unq_cells = TRUE
-excludep = TRUE
-contin_vars_only <- TRUE
-contin_vars_and_lc <- TRUE
-vars <- c('lc', 'alt', 'wc')
-filt_dates = FALSE
-date_range <- c(2000, 2020)
+rf_vers <- 4                 # increment version number with each new combination of parameters
+unq_cells = TRUE             # only use points in cells with unique combinations of values
+excludep = TRUE              # exclude locations of presence points from random background points
+vars <- c('lc', 'alt', 'wc') # variables to use as predictors in RF. Options: biom, lc, alt, wc (ecoregion, landcover, elevation, WorldClim)
 
 # Directory paths ----
 # Pre-processed points
@@ -65,9 +63,14 @@ dir.create(pred_dir, recursive=T, showWarnings = F)
 crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
 
 # Mexico for masking and mapping
-mex <- raster::getData('GADM', country='MEX', level=1, 
-                       path='data/input_data/context_Mexico') %>% 
-  st_as_sf()
+# mex <- raster::getData('GADM', country='MEX', level=1, 
+#                        path='data/input_data/context_Mexico') %>% 
+#   st_as_sf()
+# mex0 <- raster::getData('GADM', country='MEX', level=0, 
+#                        path='data/input_data/context_Mexico') %>% 
+#   st_as_sf()
+mex_fp <- 'data/input_data/context_Mexico/SNIB_dest2018gw/dest2018gw.shp'
+mex <- st_read(mex_fp)
 mex0 <- st_union(mex)
 
 # Set extent for testing
@@ -409,47 +412,10 @@ get_accuracy_metrics <- function(thresh, erf) {
 #' @export
 stack_sdms <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   
-  pol_stack <- stack(sp_fps)
-  
-  # Sum layers and save 
-  pol_rich <- sum(pol_stack, na.rm=T)
-  pol_rich_msk <- mask(pol_rich, as_Spatial(mex))
-  writeRaster(pol_rich_msk, rich_tif_fp, overwrite=T,
-              options=c("dstnodata=-99999"), wopt=list(gdal='COMPRESS=LZW'))
-  
-  # Plot richness
-  pol_rich_stars <- st_as_stars(pol_rich_msk)
-  rich_plot  <- ggplot() +
-    geom_stars(data=pol_rich_stars) +
-    geom_sf(data = mex, fill = "transparent", size = 0.2, color = alpha("lightgray", 0.2)) +
-    colormap::scale_fill_colormap(str_glue("Richness\n(N = {nlayers(pol_stack)})"), 
-                                  na.value = "transparent", 
-                                  colormap = colormap::colormaps$viridis) +
-    ggthemes::theme_hc() +
-    theme(legend.position=c(.95, 1), legend.title.align=0, legend.justification = c(1,1)) +
-    labs(x = NULL, y = NULL)
-  
-  # Save
-  ggsave(rich_plot_fp, rich_plot, width=9, height=5.7, dpi=120)
-  
-  # Facet individual PA maps
-  # pa_facets  <- rasterVis::gplot(pol_stack) +
-  #   geom_tile(aes(fill = value)) +
-  #   colormap::scale_fill_colormap(str_glue("Occupancy likelihood"), na.value = "transparent",
-  #                                 colormap = colormap::colormaps$viridis) +
-  #   theme_minimal() +
-  #   theme(legend.position='bottom') +
-  #   labs(x = NULL, y = NULL) +
-  #   coord_equal() +
-  #   facet_wrap(~ variable, nrow=3)
-  # 
-  # # Save
-  # ggsave(file.path(pred_dir, str_glue('Likhd_{nlayers(pol_stack)}species.png')), pa_facets, width=9, height=5)
-  
-}
-
-#' @export
-stack_sdms_terra <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
+  if(length(sp_fps) < 1) {
+    print('No files listed to sum.')
+    return()
+  }
   
   interval <- 30
   idx <- seq(to = length(sp_fps), by = interval)
@@ -573,10 +539,12 @@ plot_qc_maps <- function(sp_row, fig_dir) {
   
   # Get data for species
   sp_df <- sp_row$data[[1]]
-  sp_ch <- sp_row$convhull[[1]]
   sp_name <- sp_row$species
   sp_nospc <- str_replace(sp_name, ' ', '_')
-  group <- str_c(sp_row$common_group, sp_row$subgroup_a, sep = ', ')
+  group <- str_to_title(sp_row$group)
+  group <- ifelse(group == 'Bee', 
+                  str_glue("{group}, {sp_row$bee_sociality}, {sp_row$bee_nesting} nesting"), 
+                  group)
   title <- bquote(.(group)~': '~italic(.(sp_name)))
   lklhd_fp <- file.path(pred_dir, 'likelihood', str_c(sp_nospc, '.tif'))
   bnnd_fp <- file.path(pred_dir, 'binned_spec_sens', str_c(sp_nospc, '.tif'))

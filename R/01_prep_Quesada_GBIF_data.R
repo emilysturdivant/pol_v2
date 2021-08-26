@@ -1,5 +1,4 @@
-# Pre-process GBIF data compiled by Mauricio Quesada's team
-# parameters: https://www.gbif.org/developer/occurrence#parameters
+# Pre-process GBIF data compiled by Dr. Quesada's team
 
 # Initialize ----
 source('R/initialize.R')
@@ -64,7 +63,7 @@ dir.create(temp_dir, recursive = TRUE, showWarnings = FALSE)
 (fps <- list.files(pts_dir_in, '.csv', full.names = T))
 fps %>% purrr::walk(add_taxon_info)
 
-# Merge points----
+# Merge points ----
 vars <- c('species', 'genus', 'tribe', 'family', 'superfamily', 'order', 'class', 
           'decimalLongitude', 'decimalLatitude', 'eventDate', 
           'coordinateUncertaintyInMeters', 'issues', 'habitat', 
@@ -92,7 +91,7 @@ df_all <- df_all %>%
 # Save
 all_fp <- file.path(temp_dir, 'all_unfiltered.rds')
 df_all %>% saveRDS(all_fp)
-df_all <- readRDS(all_fp)
+# df_all <- readRDS(all_fp)
 
 # Filter points ----
 # drop coords with NAs, drop imprecise 
