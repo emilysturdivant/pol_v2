@@ -189,7 +189,7 @@ abeja_subgroups <- abeja_groups_raw %>%
          bee_sociality = case_when(
            Sociabilidad == 'Solitaria' ~ 'solitary',
            Sociabilidad %in% c('Eusocial', 'Social') ~ 'social',
-           Sociabilidad %in% c('Solitarias/Sociales', 'Solitaria/semisocial') ~ 'solitary/social',
+           Sociabilidad %in% c('Solitarias/Sociales', 'Solitaria/semisocial') ~ 'solitary-social',
            TRUE ~ as.character(NA)
          ),
          bee_nesting = case_when(
@@ -236,6 +236,8 @@ pol_df2 <- pol_df %>%
   rows_patch(nest_patch, by = 'species')
 
 # Save points ----
+pol_df2 <- pol_df2 %>%
+  mutate(bee_sociality = str_replace_all(bee_sociality, 'solitary/social', 'solitary-social'))
 pol_df2 %>% saveRDS(pts_nested_rds)
 pol_df2 <- readRDS(pts_nested_rds)
 

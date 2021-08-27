@@ -25,6 +25,10 @@ unq_cells = TRUE             # only use points in cells with unique combinations
 excludep = TRUE              # exclude locations of presence points from random background points
 vars <- c('lc', 'alt', 'wc') # variables to use as predictors in RF. Options: biom, lc, alt, wc (ecoregion, landcover, elevation, WorldClim)
 
+# Analysis parameters ----
+buffer_distance <- units::set_units(10, 'km')
+crs <- 6362 # used by INEGI for all of Mexico
+
 # Directory paths ----
 # Pre-processed points
 pts_dir <- 'data/tidy/pollinator_points'
@@ -72,6 +76,10 @@ crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
 mex_fp <- 'data/input_data/context_Mexico/SNIB_dest2018gw/dest2018gw.shp'
 mex <- st_read(mex_fp)
 mex0 <- st_union(mex)
+
+anp_fp <- 'data/input_data/context_Mexico/ap_temp1_ANPs.gpkg'
+anp_dir <- 'data/tidy/analysis_zones/ANPs'
+anp_terr_fp <- file.path(anp_dir, 'ANPs_terr_singlepart.gpkg')
 
 # Set extent for testing
 ext <- raster::extent(mex)
@@ -409,23 +417,71 @@ get_accuracy_metrics <- function(thresh, erf) {
     bind_cols(tibble(threshold = thresh), .)
 }
 
-#' @export
-stack_sdms <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
+plot_richness <- function(rich_tif, species_ct, ref_poly, out_fp = NA) {
   
-  if(length(sp_fps) < 1) {
+  if(is.na(out_fp)){
+    out_fp <- str_c(tools::file_path_sans_ext(rich_tif), '.png')
+  }
+ 
+  # Convert to stars
+  # pol_rich_stars <- st_as_stars(rich_rast)
+  pol_rich_stars <- read_stars(rich_tif)
+  rich_range <- terra::minmax(terra::rast(rich_tif))
+  col_lim <- round(rich_range)
+  breaks <- seq(col_lim[1], col_lim[2], length.out=3)
+  
+  # Plot richness
+  rich_plot  <- ggplot() +
+    geom_stars(data=pol_rich_stars) +
+    geom_sf(data = ref_poly, 
+            fill = "transparent", 
+            size = 0.2, 
+            color = alpha("lightgray", 0.2)) +
+    colormap::scale_fill_colormap(str_glue("Richness\n(N = {species_ct})"), 
+                                  na.value = "transparent", 
+                                  colormap = colormap::colormaps$viridis, 
+                                  breaks = breaks,
+                                  labels = breaks,
+                                  limits = as.vector(col_lim)) +    
+    theme_minimal() +
+    theme(legend.position = c(.95, 1), 
+          legend.title.align = 0,
+          legend.justification = c(1,1),
+          plot.background = element_rect(fill = 'white'),
+          panel.grid = element_blank(),
+          panel.border = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank())
+  
+  # Save
+  ggsave(out_fp, rich_plot, width=9, height=5.7, dpi=120)
+}
+
+#' @export
+stack_sdms <- function(dat, name, out_dir, mex, rf_vers){
+  
+  fps <- dat$lklhd_tif
+
+  if(length(fps) < 1) {
     print('No files listed to sum.')
     return()
   }
   
   interval <- 30
-  idx <- seq(to = length(sp_fps), by = interval)
+  species_ct <- length(fps)
+  idx <- seq(to = species_ct, by = interval)
+  
+  # Output filenames
+  rich_fn <- str_glue('richness_{name}_rf{rf_vers}_{species_ct}species_lkhd')
+  rich_plot_fp <- file.path(out_dir, str_glue('{rich_fn}.png'))
+  rich_tif_fp <- file.path(out_dir, str_glue('{rich_fn}.tif'))
   
   temp_dir <- file.path(dirname(rich_tif_fp), 'temp')
   unlink(temp_dir, recursive = TRUE)
   dir.create(temp_dir, recursive = TRUE)
   
   for(i in idx) {
-    fps_sub <- sp_fps[i:(i+interval-1)]
+    fps_sub <- fps[i:(i+interval-1)]
     fps_sub <- fps_sub[!is.na(fps_sub)]
     pol_stack <- terra::rast(fps_sub)
     
@@ -438,33 +494,19 @@ stack_sdms <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   }
 
   # Sum temp layers
-  temp_fps <- list.files(temp_dir, basename(rich_tif_fp))
-  pol_stack <- terra::rast(fps_sub)
+  temp_fps <- list.files(temp_dir, basename(rich_tif_fp), full.names = TRUE)
+  pol_stack <- terra::rast(temp_fps)
   pol_rich <- sum(pol_stack, na.rm=T)
+  
+  # Load reference polygons
+  if(is.character(mex)) mex <- st_read(mex)
   
   # Convert back to decimal and save
   pol_rich_msk <- terra::mask(pol_rich, terra::vect(mex), filename = rich_tif_fp,
                               overwrite = TRUE)
   
   # Plot richness
-  pol_rich_stars <- st_as_stars(pol_rich_msk)
-  rich_plot  <- ggplot() +
-    geom_stars(data=pol_rich_stars) +
-    geom_sf(data = mex, fill = "transparent", size = 0.2, color = alpha("lightgray", 0.2)) +
-    colormap::scale_fill_colormap(str_glue("Richness\n(N = {length(sp_fps)})"), 
-                                  na.value = "transparent", 
-                                  colormap = colormap::colormaps$viridis) +    
-    theme_minimal() +
-    theme(legend.position = c(.95, 1), 
-          legend.title.align = 0,
-          legend.justification = c(1,1),
-          plot.background = element_rect(fill = 'white'),
-          panel.grid = element_blank(),
-          axis.title = element_blank(),
-          axis.text = element_blank())
-  
-  # Save
-  ggsave(rich_plot_fp, rich_plot, width=9, height=5.7, dpi=120)
+  # plot_richness(rich_tif_fp, rich_plot_fp, species_ct = species_ct, mex)
   
   # Facet individual PA maps
   # pa_facets  <- rasterVis::gplot(pol_stack) +
@@ -480,6 +522,7 @@ stack_sdms <- function(sp_fps, rich_tif_fp, rich_plot_fp, mex){
   # # Save
   # ggsave(file.path(pred_dir, str_glue('Likhd_{nlayers(pol_stack)}species.png')), pa_facets, width=9, height=5)
   
+  return(rich_tif_fp)
 }
 
 plot_lklhd_map <- function(lklhd_tif, filename = NULL){

@@ -7,10 +7,14 @@ source('R/initialize.R')
 
 # Load filtered points ----
 pol_df2 <- readRDS(filt_pts_rds)
+pol_df2 %>% distinct(bee_nesting)
+pol_df2 <- pol_df2 %>%
+  mutate(bee_sociality = str_replace_all(bee_sociality, 'solitary/social', 'solitary-social'))
 
 dat <- readRDS(pts_nested_rds)
 
 # Look at model statistics together ----
+fps <- list.files(file.path(pred_dir, 'model_evals'), '*.csv$', full.names = T)
 eval_tbl_fp <- file.path(pred_dir, str_c('model_evals_', length(fps), 'species.csv'))
 if(!file.exists(eval_tbl_fp)){
   if(length(fps) > 0) {
@@ -37,62 +41,68 @@ fps <- list.files(file.path(pred_dir, 'likelihood'), '*.tif$', full.names = T) %
 pol_df3 <- pol_df3 %>% left_join(fps, by = 'species')
 
 # Sum richness for each pollinator group ----
-iterate_stack_sdms <- function(fps, name, mex) {
+stack_sdms_by_group <- function(df, out_dir, grp_var, mex, rf_vers) {
+
+  rich_df <- df %>% 
+    select(.data[[grp_var]], lklhd_tif) %>% 
+    group_by(.data[[grp_var]]) %>% 
+    nest(fps = c(lklhd_tif)) %>% 
+    ungroup()
   
-  # Load reference polygons
-  if(is.character(mex)) mex <- st_read(mex)
-  # mex <- st_read(mex_fp)
+  rich_df <- rich_df %>% 
+    mutate(rich_tif = purrr::map2_chr(fps, .data[[grp_var]], 
+                                      stack_sdms,
+                                      out_dir, 
+                                      mex, 
+                                      rf_vers),
+           species_ct = purrr::map_dbl(fps, nrow))
   
-  fps <- fps[[1]]
+  acc_df <- df %>% 
+    group_by(.data[[grp_var]]) %>% 
+    summarize(auc_mean = mean(auc, na.rm = TRUE))
   
-  # Output filenames
-  rich_fn <- str_glue('richness_{name}_rf{rf_vers}_{length(fps)}species_lkhd')
-  rich_plot_fp <- file.path(pred_dir, 'richness', str_glue('{rich_fn}.png'))
-  rich_tif_fp <- file.path(pred_dir, 'richness',  str_glue('{rich_fn}.tif'))
-  
-  # Sum likelihood rasters
-  stack_sdms(fps, rich_tif_fp, rich_plot_fp, mex)
+  full_join(rich_df, acc_df)
 }
 
-# Create nested DF
-pol_nested <- pol_df3 %>% 
-  select(group, lklhd_tif) %>% 
-  group_by(group) %>% 
-  nest(fps = c(lklhd_tif)) %>% 
-  ungroup()
+# Richness for all pollinator groups
+out_dir <- file.path(pred_dir, 'richness')
+pol_richness <- stack_sdms_by_group(pol_df3, out_dir, 'group', mex, rf_vers)
 
-purrr::walk2(pol_nested$data, pol_nested$group, iterate_stack_sdms, mex)
+purrr::walk2(pol_richness$rich_tif, 
+             pol_richness$species_ct,
+             plot_richness,
+             mex)
 
-
-# pol_df3 %>% distinct(group, bee_sociality, bee_nesting)
-pol_df3 %>% distinct(group)
-
-sp_fps <- pol_df3 %>% 
-  filter(group == 'bee', !is.na(lklhd_tif)) %>% 
-  dplyr::select(lklhd_tif) %>% 
-  deframe()
-
-# Create nested DF
-pol_nested <- pol_df3 %>% 
+# Richness by bee sociality ----
+out_dir <- file.path(pred_dir, 'richness', 'bee_subgroups')
+bee_richness_soc <- pol_df3 %>% 
   filter(!is.na(bee_sociality)) %>% 
-  select(bee_sociality, lklhd_tif) %>% 
-  group_by(bee_sociality) %>% 
-  nest(fps = c(lklhd_tif)) %>% 
-  ungroup()
+  stack_sdms_by_group(out_dir, 'bee_sociality', mex, rf_vers)
 
-purrr::walk2(pol_nested$fps, pol_nested$bee_sociality, iterate_stack_sdms, mex)
+purrr::walk2(bee_richness_soc$rich_tif, 
+            bee_richness_soc$species_ct,
+              plot_richness,
+              mex)
 
-# Create nested DF
-pol_nested <- pol_df3 %>% 
+# Richness by bee nesting ----
+out_dir <- file.path(pred_dir, 'richness', 'bee_subgroups')
+bee_richness_nest <- pol_df3 %>% 
   filter(!is.na(bee_nesting)) %>% 
-  select(bee_nesting, lklhd_tif) %>% 
-  group_by(bee_nesting) %>% 
-  nest(fps = c(lklhd_tif)) %>% 
-  ungroup()
+  stack_sdms_by_group(out_dir, 'bee_nesting', mex, rf_vers)
 
-purrr::walk2(pol_nested$fps, pol_nested$bee_nesting, iterate_stack_sdms, mex)
+purrr::walk2(bee_richness_nest$rich_tif, 
+             bee_richness_nest$species_ct,
+             plot_richness,
+             mex)
 
-
+# Specific richness map ----
+# Plot richness
+anps <- st_read(anp_terr_fp)
+species_ct <- 243
+rich_tif <- list.files(file.path(pred_dir, 'richness', 'bee_subgroups'),
+                       'stems.*\\.tif', full.names = TRUE)
+rich_plot_fp <- file.path(pred_dir, 'richness', 'requested_maps', 'rf4_stemnesting_bees24lkhd_anps.png')
+plot_richness(rich_tif, species_ct, anps, rich_plot_fp)
 
 
 # pngs for QC ----
