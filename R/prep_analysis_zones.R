@@ -12,16 +12,6 @@
 
 # Initialize -------------------------------------------------------------------
 source('R/initialize.R')
-buffer_distance <- units::set_units(10, 'km')
-crs <- 6362 # used by INEGI for all of Mexico
-
-# Filepaths
-anp_fp <- 'data/input_data/context_Mexico/ap_temp1_ANPs.gpkg'
-anp_dir <- 'data/tidy/analysis_zones/ANPs'
-dir.create(anp_dir, recursive = TRUE, showWarnings = FALSE)
-
-anp_terr_fp <- file.path(anp_dir, 'ANPs_terr_singlepart.gpkg')
-anps_biom_fp <- file.path(anp_dir, 'ANPs_with_biomes.gpkg')
 
 # Functions --------------------------------------------------------------------
 get_diversity_for_zone_polys <- function(df, zone_polys, zone_str=NA, polys_id_fld, 
@@ -121,39 +111,33 @@ get_pollinators_in_anp_zones <- function(name, date_range, anps_terr,
 
 # Newer functions ----
 #' @export
-clean_anps_conditional <- function(anp_fp, anp_terr_fp, crs, mex) {
+clean_anps_conditional <- function(anp_fp, anp_terr_fp, crs, mex, overwrite = FALSE) {
   
-  if(!file.exists(anp_terr_fp)){
-    
-    # Load polygons, clean, and convert to single-part
-    anps_proj <- st_read(anp_fp) %>% 
-      select(ID_ANP) %>% 
-      st_transform(crs=crs) %>% 
-      st_set_precision(1e5)  %>% 
-      st_make_valid %>% 
-      st_collection_extract('POLYGON') %>% 
-      st_simplify(dTolerance=40, preserveTopology=T) %>% 
-      st_cast("MULTIPOLYGON") %>% 
-      st_cast("POLYGON") %>%
-      rownames_to_column %>% 
-      st_make_valid()
-    
-    # Clip to terrestrial portions using Mexico boundary
-    anps_terr <- anps_proj %>% 
-      st_intersection(mex)
-    
-    # Get area
-    anps_terr$area_ha <- anps_terr %>% 
-      st_area %>% units::set_units('ha') %>% units::set_units(NULL)
-    
-    # Save
-    anps_terr %>% st_write(anp_terr_fp, delete_dsn=T)
-    
-  } else {
-    
-    anps_terr <- st_read(anp_terr_fp)
-    
-  }
+  if(file.exists(anp_terr_fp) & !overwrite) return(st_read(anp_terr_fp))
+
+  # Load polygons, clean, and convert to single-part
+  anps_proj <- st_read(anp_fp) %>% 
+    select(ID_ANP) %>% 
+    st_transform(crs=crs) %>% 
+    st_set_precision(1e5)  %>% 
+    st_make_valid %>% 
+    st_collection_extract('POLYGON') %>% 
+    st_simplify(dTolerance=40, preserveTopology=T) %>% 
+    st_cast("MULTIPOLYGON") %>% 
+    st_cast("POLYGON") %>%
+    rownames_to_column %>% 
+    st_make_valid()
+  
+  # Clip to terrestrial portions using Mexico boundary
+  anps_terr <- anps_proj %>% 
+    st_intersection(mex)
+  
+  # Get area
+  anps_terr$area_ha <- anps_terr %>% 
+    st_area %>% units::set_units('ha') %>% units::set_units(NULL)
+  
+  # Save
+  anps_terr %>% st_write(anp_terr_fp, delete_dsn=T)
   
   return(anps_terr)
 }
@@ -315,7 +299,6 @@ get_biomes_conditional <- function(biom_diss_fp, biom_dir, mex) {
   biom_diss %>% st_write(biom_diss_fp)
   
   return(biom_diss)
-  
 }
 
 #' @export
@@ -343,7 +326,8 @@ merge_anp_zones_conditional <- function(bind_fp, anps_terr, anps_buff, vpols, bu
                  c(inside_str, buff_str, outside_str)) 
   
   # Bind SFCs
-  anp_zones <- bind_rows(anps_terr, anps_buff, 
+  anp_zones <- bind_rows(st_cast(anps_terr, 'MULTIPOLYGON'),
+                         st_cast(anps_buff, 'MULTIPOLYGON'),
                          st_cast(vpols, 'MULTIPOLYGON')
                          ) %>% 
     mutate(zone_temp = recode(zone, !!!lu),
@@ -390,235 +374,229 @@ mex <- st_read(mex_fp) %>%
 mex0 <- st_union(mex)
 
 # ANP polygons ----
-anps_terr <- clean_anps_conditional(anp_fp, anp_terr_fp, crs, mex) %>% 
+anps_terr <- clean_anps_conditional(anps_in_fp, anp_terr_fp, crs, mex) %>% 
+  st_transform(crs=crs)
+anps_terr <- clean_anps_conditional(anps_in_fp, anp_terr_fp, crs, mex0) %>% 
   st_transform(crs=crs)
 
 # ANP buffer 
-anps_buff <- get_buffer_conditional(buffer_distance, anps_proj = anps_terr, 
+anps_buff <- get_buffer_conditional(buffer_distance, 
+                                    anps_proj = anps_terr, 
                                     area_fld = 'area_ha') %>% 
   st_transform(crs=crs)
 
-# Merge ANPs and buffer
-anps_buffin <- bind_rows(anps_terr, anps_buff) %>% 
-  group_by(rowname, ID_ANP) %>% 
-  summarize()
-
 # Voronoi polygons
-# vpols <- make_voronois(anps_buffin, mex0)
 vpols <- get_voronois_conditional(anps_terr, buffer_distance, region_poly=mex0) %>% 
   st_transform(crs=crs)
 
 # Get merged ANP zones ----
-bind_fp <- str_c('data/tidy/analysis_zones/ANPs/ANPs_allzones_buff', 
-                 buffer_distance,'km.gpkg')
 anp_zones <- merge_anp_zones_conditional(bind_fp, anps_terr, anps_buff, 
                                            vpols, buffer_distance)
 
 # Ecoregions --------------------------------------------------------
 # Biomes CONABIO 
-biom_diss_fp <- 'data/data_out/biomes/ecoregions_diss7.gpkg'
 biom_diss <- get_biomes_conditional(biom_diss_fp, 
                                     biom_dir='data/input_data/environment_variables/CONABIO', 
                                     mex)
 
-# Land cover ----
-# Land cover from INEGI via CONABIO
-fp_usv <- "data/input_data/ag_INEGI_2017/other_sources/usv250s6gw.shp"
-
-# Output files
-# grp_name
-usv_fname <- tools::file_path_sans_ext(basename(fp_usv))
-# crop_class_fp <- file.path("data/intermediate_data/ag_by_region", 
-#                            str_c(str_c(usv_fname, 'tipo', '7classes', 
-#                                        str_c(grp_name, collapse=''), 
-#                                        sep='_'), '.gpkg'))
+# # Land cover ----
+# # Land cover from INEGI via CONABIO
+# fp_usv <- "data/input_data/ag_INEGI_2017/other_sources/usv250s6gw.shp"
 # 
-
-# Load file
-usv1 <- st_read(fp_usv) %>% 
-  st_make_valid() %>% 
-  st_transform(crs)
-
-usv2 <- usv1 %>% 
-  # st_crop(sub1) %>%
-  st_simplify(dTolerance=40, preserveTopology=T)
-
-usv2 %>% object.size() %>% print(units='MB')
-
-# classify into 7 classes
-usv3 <- usv2 %>% 
-  mutate(tipo = case_when(
-    str_detect(DESCRIPCIO, 'INDUCIDO$') ~ 'inducido',
-    str_detect(DESCRIPCIO, '^PASTIZAL') ~ 'pastizal',
-    str_detect(CVE_UNION, '^V|^B|^S|^P') ~ 'vegetacion',# bosque, selva, pastizal, sabana, palmar, etc.
-    str_detect(DESCRIPCIO, '^AGRICULTURA') ~ 'agricultura', # does not include shifting cultivation (nómada)
-    str_detect(CVE_UNION, '^ACUI|^H2O') ~ 'agua',
-    str_detect(CVE_UNION, '^ADV|^DV') ~ 'sin_veg',
-    str_detect(CVE_UNION, '^AH') ~ 'construido',
-    TRUE ~ 'otro'
-  ))
-
-usv %>% object.size() %>% print(units='MB')
-
-# # Save
-# usv %>% st_write(crop_class_fp, delete_dsn=T)
-# usv <- sf::st_read(crop_class_fp)
-
-# Reclass and dissolve
-key <- c(inducido='veg', pastizal='veg', vegetacion='veg', agricultura='ag', 
-         agua='otro', sin_veg='otro', construido='otro')
-usv_diss1 <- usv3 %>% 
-  mutate(tipo =  recode(tipo, !!!key)) %>% 
-  group_by(tipo) %>% 
-  summarize()
-
-usv_diss2 <- usv_diss1 %>% 
-  st_simplify(dTolerance=40, preserveTopology=T)
-
-usv_diss3 <- usv_diss2 %>% 
-  nngeo::st_remove_holes(100000) 
-
-usv_diss2 %>% object.size() %>% print(units='MB')
-
-# Save dissolved USV ----
-usv_fname <- tools::file_path_sans_ext(basename(fp_usv))
-diss_fp <- file.path("data/intermediate_data",
-                     str_c(str_c(usv_fname, 'diss', '3class',
-                                 sep='_'), '.gpkg'))
-usv_diss2 %>% st_write(diss_fp, delete_dsn=T)
-
-# Load dissolved land cover (3 classes) ----
-usv_diss <- st_read(diss_fp)
-
-# Get shifting agriculture ----
-# nma_fp <- file.path("data/intermediate_data/ag_by_region", 'polys_nma_ChiapasTabasco.gpkg')
-# fn <- str_c(str_c(tools::file_path_sans_ext(basename(fp_usv)), 
-#                   'diss', '4class', 'nma', str_c(grp_name, collapse=''), sep='_'), '.gpkg')
-# diss_nma_fp <- file.path("data/intermediate_data/ag_by_region", fn)
+# # Output files
+# # grp_name
+# usv_fname <- tools::file_path_sans_ext(basename(fp_usv))
+# # crop_class_fp <- file.path("data/intermediate_data/ag_by_region", 
+# #                            str_c(str_c(usv_fname, 'tipo', '7classes', 
+# #                                        str_c(grp_name, collapse=''), 
+# #                                        sep='_'), '.gpkg'))
+# # 
 # 
-# # Get all agriculture subset to region
-# fn <- str_c(str_c('polys_ag_INEGI', str_c(grp_name, collapse=''), sep='_'), '.gpkg')
-# fp <- file.path("data/intermediate_data/ag_by_region", fn)
+# # Load file
+# usv1 <- st_read(fp_usv) %>% 
+#   st_make_valid() %>% 
+#   st_transform(crs)
 # 
-# if(file.exists(fp)) {
+# usv2 <- usv1 %>% 
+#   # st_crop(sub1) %>%
+#   st_simplify(dTolerance=40, preserveTopology=T)
+# 
+# usv2 %>% object.size() %>% print(units='MB')
+# 
+# # classify into 7 classes
+# usv3 <- usv2 %>% 
+#   mutate(tipo = case_when(
+#     str_detect(DESCRIPCIO, 'INDUCIDO$') ~ 'inducido',
+#     str_detect(DESCRIPCIO, '^PASTIZAL') ~ 'pastizal',
+#     str_detect(CVE_UNION, '^V|^B|^S|^P') ~ 'vegetacion',# bosque, selva, pastizal, sabana, palmar, etc.
+#     str_detect(DESCRIPCIO, '^AGRICULTURA') ~ 'agricultura', # does not include shifting cultivation (nómada)
+#     str_detect(CVE_UNION, '^ACUI|^H2O') ~ 'agua',
+#     str_detect(CVE_UNION, '^ADV|^DV') ~ 'sin_veg',
+#     str_detect(CVE_UNION, '^AH') ~ 'construido',
+#     TRUE ~ 'otro'
+#   ))
+# 
+# usv %>% object.size() %>% print(units='MB')
+# 
+# # # Save
+# # usv %>% st_write(crop_class_fp, delete_dsn=T)
+# # usv <- sf::st_read(crop_class_fp)
+# 
+# # Reclass and dissolve
+# key <- c(inducido='veg', pastizal='veg', vegetacion='veg', agricultura='ag', 
+#          agua='otro', sin_veg='otro', construido='otro')
+# usv_diss1 <- usv3 %>% 
+#   mutate(tipo =  recode(tipo, !!!key)) %>% 
+#   group_by(tipo) %>% 
+#   summarize()
+# 
+# usv_diss2 <- usv_diss1 %>% 
+#   st_simplify(dTolerance=40, preserveTopology=T)
+# 
+# usv_diss3 <- usv_diss2 %>% 
+#   nngeo::st_remove_holes(100000) 
+# 
+# usv_diss2 %>% object.size() %>% print(units='MB')
+# 
+# # Save dissolved USV ----
+# usv_fname <- tools::file_path_sans_ext(basename(fp_usv))
+# diss_fp <- file.path("data/intermediate_data",
+#                      str_c(str_c(usv_fname, 'diss', '3class',
+#                                  sep='_'), '.gpkg'))
+# usv_diss2 %>% st_write(diss_fp, delete_dsn=T)
+# 
+# # Load dissolved land cover (3 classes) ----
+# usv_diss <- st_read(diss_fp)
+# 
+# # Get shifting agriculture ----
+# # nma_fp <- file.path("data/intermediate_data/ag_by_region", 'polys_nma_ChiapasTabasco.gpkg')
+# # fn <- str_c(str_c(tools::file_path_sans_ext(basename(fp_usv)), 
+# #                   'diss', '4class', 'nma', str_c(grp_name, collapse=''), sep='_'), '.gpkg')
+# # diss_nma_fp <- file.path("data/intermediate_data/ag_by_region", fn)
+# # 
+# # # Get all agriculture subset to region
+# # fn <- str_c(str_c('polys_ag_INEGI', str_c(grp_name, collapse=''), sep='_'), '.gpkg')
+# # fp <- file.path("data/intermediate_data/ag_by_region", fn)
+# # 
+# # if(file.exists(fp)) {
+# #   
+# #   polys <- st_read(fp)
+# #   
+# # } else {
+# #   
+# #   polys_fp <- file.path("data/intermediate_data", 'polys_ag_INEGI.gpkg')
+# #   polys <- st_read(polys_fp) %>% 
+# #     st_filter(sub1)
+# #   
+# #   polys %>% st_write(fp)
+# #   
+# # }
+# # 
+# # # Dissolve shifting agriculture polygons
+# # nma_diss <- polys %>% 
+# #   filter(CLAVE == 'NMA') %>% 
+# #   st_crop(sub1) %>% 
+# #   group_by() %>% 
+# #   summarize() %>% 
+# #   transmute(tipo='ag_nma')
+# # 
+# # # Save
+# # nma_diss %>% st_write(nma_fp, delete_dsn=T)
+# # 
+# # # Load
+# # nma_diss <- st_read(nma_fp)
+# # 
+# # # Add shifting ag to land cover
+# # diss_wo_nma <- st_difference(usv_diss, nma_diss)
+# # usv_nma <- bind_rows(diss_wo_nma, nma_diss)
+# # 
+# # # Save
+# # usv_nma %>% st_write(diss_nma_fp)
+# 
+# 
+# # Biome subset ================================================
+# # Select biome
+# biom_list <- biom_diss %>% st_drop_geometry %>% distinct %>% deframe
+# (biom_name <- biom_list[[7]])
+# biom1 <- biom_diss %>% 
+#   filter(DESECON1==biom_name)
+# 
+# # Intersect ANP zones with biome subset
+# anp_zones_biom1 <- st_intersection(anp_zones, biom1) %>% 
+#   st_make_valid() %>% 
+#   st_cast('MULTIPOLYGON') %>% 
+#   st_cast('POLYGON')
+# anp_zones_biom1$area_ha <- st_area(anp_zones_biom1) %>% set_units('ha') %>% set_units(NULL)
+# 
+# 
+# # Intersect ANP zones with biome subset
+# diss_biom_fp <- file.path("data/intermediate_data", 
+#                           str_replace_all(biom_name, ' |-', ''),
+#                           str_c(str_c(usv_fname, 'diss', '3class', 
+#                                       str_replace_all(biom_name, ' |-', ''),
+#                                       sep='_'), '.gpkg'))
+# 
+# if(!file.exists(diss_biom_fp)) {
+#   usv_biom1 <- st_intersection(usv_diss, biom1) %>% 
+#     st_simplify(dTolerance=40, preserveTopology=T) %>% 
+#     nngeo::st_remove_holes(1000000) 
+#   usv_biom1$area_ha <- st_area(usv_biom1) %>% set_units('ha') %>% set_units(NULL)
 #   
-#   polys <- st_read(fp)
+#   # Save
+#   dir.create(dirname(diss_biom_fp))
+#   usv_biom1 %>% st_write(diss_biom_fp, delete_dsn=T)
+# }
+# 
+# usv_biom1 <- st_read(diss_biom_fp) %>% 
+#   st_make_valid() %>% 
+#   st_cast('MULTIPOLYGON') %>% 
+#   st_cast('POLYGON')
+# 
+# usv_biom1 %>% object.size() %>% print(units='MB')
+# 
+# # Look
+# tm_shape(usv_biom1) + tm_polygons(alpha=.5)
+# tm_shape(anp_zones_biom1) + tm_polygons(alpha=.5)
+# 
+# # Intersect USV with ANP zones ----
+# biom_zone_fp <- file.path("data/intermediate_data", 
+#                           str_replace_all(biom_name, ' |-', ''),
+#                           str_c(str_c('ixn_ANPs_usv3_diss', 
+#                                       str_replace_all(biom_name, ' |-', ''),
+#                                       str_glue('buff{buffer_distance}km'),
+#                                       sep='_'), '.gpkg'))
+# 
+# if(!file.exists(biom_zone_fp)) {
+#   biom1_zones1 <- st_intersection(anp_zones_biom1, select(usv_biom1, tipo))
 #   
-# } else {
+#   # Zone codes
+#   inside_str <- str_c('Inside NPA')
+#   buff_str <- str_c('Buffer ', buffer_distance, ' km')
+#   outside_str <- str_c('Outside buffer')
 #   
-#   polys_fp <- file.path("data/intermediate_data", 'polys_ag_INEGI.gpkg')
-#   polys <- st_read(polys_fp) %>% 
-#     st_filter(sub1)
+#   lu <- setNames(c('anp', 'buff', 'out'), 
+#                  c(inside_str, buff_str, outside_str)) 
 #   
-#   polys %>% st_write(fp)
+#   biom1_zones2 <- biom1_zones1 %>% 
+#     st_collection_extract('POLYGON') %>%
+#     st_cast('MULTIPOLYGON') %>% 
+#     st_cast('POLYGON') %>% 
+#     group_by(zone, tipo) %>% 
+#     summarize() %>% 
+#     mutate(zone = recode(zone, !!!lu),
+#            name = str_c(zone, tipo, sep='_'))
+#   
+#   biom1_zones2$area_ha <- st_area(biom1_zones2) %>% set_units('ha') %>% set_units(NULL)
+#   
+#   # Save
+#   biom1_zones2 %>% st_write(biom_zone_fp, delete_dsn=T)
 #   
 # }
 # 
-# # Dissolve shifting agriculture polygons
-# nma_diss <- polys %>% 
-#   filter(CLAVE == 'NMA') %>% 
-#   st_crop(sub1) %>% 
-#   group_by() %>% 
-#   summarize() %>% 
-#   transmute(tipo='ag_nma')
-# 
-# # Save
-# nma_diss %>% st_write(nma_fp, delete_dsn=T)
-# 
 # # Load
-# nma_diss <- st_read(nma_fp)
+# biom1_zones <- st_read(biom_zone_fp)
 # 
-# # Add shifting ag to land cover
-# diss_wo_nma <- st_difference(usv_diss, nma_diss)
-# usv_nma <- bind_rows(diss_wo_nma, nma_diss)
-# 
-# # Save
-# usv_nma %>% st_write(diss_nma_fp)
-
-
-# Biome subset ================================================
-# Select biome
-biom_list <- biom_diss %>% st_drop_geometry %>% distinct %>% deframe
-(biom_name <- biom_list[[7]])
-biom1 <- biom_diss %>% 
-  filter(DESECON1==biom_name)
-
-# Intersect ANP zones with biome subset
-anp_zones_biom1 <- st_intersection(anp_zones, biom1) %>% 
-  st_make_valid() %>% 
-  st_cast('MULTIPOLYGON') %>% 
-  st_cast('POLYGON')
-anp_zones_biom1$area_ha <- st_area(anp_zones_biom1) %>% set_units('ha') %>% set_units(NULL)
-
-
-# Intersect ANP zones with biome subset
-diss_biom_fp <- file.path("data/intermediate_data", 
-                          str_replace_all(biom_name, ' |-', ''),
-                          str_c(str_c(usv_fname, 'diss', '3class', 
-                                      str_replace_all(biom_name, ' |-', ''),
-                                      sep='_'), '.gpkg'))
-
-if(!file.exists(diss_biom_fp)) {
-  usv_biom1 <- st_intersection(usv_diss, biom1) %>% 
-    st_simplify(dTolerance=40, preserveTopology=T) %>% 
-    nngeo::st_remove_holes(1000000) 
-  usv_biom1$area_ha <- st_area(usv_biom1) %>% set_units('ha') %>% set_units(NULL)
-  
-  # Save
-  dir.create(dirname(diss_biom_fp))
-  usv_biom1 %>% st_write(diss_biom_fp, delete_dsn=T)
-}
-
-usv_biom1 <- st_read(diss_biom_fp) %>% 
-  st_make_valid() %>% 
-  st_cast('MULTIPOLYGON') %>% 
-  st_cast('POLYGON')
-
-usv_biom1 %>% object.size() %>% print(units='MB')
-
-# Look
-tm_shape(usv_biom1) + tm_polygons(alpha=.5)
-tm_shape(anp_zones_biom1) + tm_polygons(alpha=.5)
-
-# Intersect USV with ANP zones ----
-biom_zone_fp <- file.path("data/intermediate_data", 
-                          str_replace_all(biom_name, ' |-', ''),
-                          str_c(str_c('ixn_ANPs_usv3_diss', 
-                                      str_replace_all(biom_name, ' |-', ''),
-                                      str_glue('buff{buffer_distance}km'),
-                                      sep='_'), '.gpkg'))
-
-if(!file.exists(biom_zone_fp)) {
-  biom1_zones1 <- st_intersection(anp_zones_biom1, select(usv_biom1, tipo))
-  
-  # Zone codes
-  inside_str <- str_c('Inside NPA')
-  buff_str <- str_c('Buffer ', buffer_distance, ' km')
-  outside_str <- str_c('Outside buffer')
-  
-  lu <- setNames(c('anp', 'buff', 'out'), 
-                 c(inside_str, buff_str, outside_str)) 
-  
-  biom1_zones2 <- biom1_zones1 %>% 
-    st_collection_extract('POLYGON') %>%
-    st_cast('MULTIPOLYGON') %>% 
-    st_cast('POLYGON') %>% 
-    group_by(zone, tipo) %>% 
-    summarize() %>% 
-    mutate(zone = recode(zone, !!!lu),
-           name = str_c(zone, tipo, sep='_'))
-  
-  biom1_zones2$area_ha <- st_area(biom1_zones2) %>% set_units('ha') %>% set_units(NULL)
-  
-  # Save
-  biom1_zones2 %>% st_write(biom_zone_fp, delete_dsn=T)
-  
-}
-
-# Load
-biom1_zones <- st_read(biom_zone_fp)
-
-tm_shape(biom1_zones) + tm_polygons(alpha=.5)
+# tm_shape(biom1_zones) + tm_polygons(alpha=.5)
 
 # ~~~Pollinator points~~~ ----
 # Diversity dataframe for ANP zone, biome, land use sites ----

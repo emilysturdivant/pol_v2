@@ -47,6 +47,12 @@ zones_fn <- 'v1_stack_anps3_biomes7_usv3'
 zones_ras_fp <- file.path(zone_polys_dir, str_c(zones_fn, '.tif'))
 zones_lu_fp <- file.path(zone_polys_dir, str_c(zones_fn, '_lu.rds'))
 
+# Zones raster and lookup table
+zone_polys_dir <- file.path('data', 'tidy', 'analysis_zones')
+zones_fn <- 'stack_anp_biome_3x7'
+zones_ras_fp <- file.path(zone_polys_dir, str_c(zones_fn, '.tif'))
+zones_lu_fp <- file.path(zone_polys_dir, str_c(zones_fn, '_lu.rds'))
+
 # Directory for richness dataframes
 div_dir <- file.path(pred_dir, 'diversity_by_zones', zones_fn)
 dir.create(div_dir, recursive=TRUE, showWarnings = F)
@@ -64,94 +70,32 @@ Parameters:
 ```{r pre-process, eval=TRUE}
 if(!file.exists(zones_ras_fp)){
   
-  # File paths
-  anps_fp <- file.path(zone_polys_dir, 'ANPs_buff10km.gpkg')
-  biom_diss_fp <- file.path(zone_polys_dir, 'ecoregions_diss7.gpkg')
-  usv_fn <- 'usv250s6gw_diss_3class.gpkg'
-  usv_fp <- file.path(zone_polys_dir, usv_fn)
-
   # Input pollinator richness 
-  pol_group <- 'Abejas'
-  fp_tail <- file.path('sdm', str_c(unq_code, '_', dfilt_code), rf_code, pol_group)
-  pred_dir <- here::here('data', 'data_out', fp_tail)
-  rich_fn <- str_glue('{rich_code}_rich_{pol_group}_{dfilt_code}_{nspecies}species')
-  rich_tif_fp <- here::here(pred_dir, str_glue('{rich_fn}.tif'))
-  rich_ras <- terra::rast(rich_tif_fp)
-    
-  # ANP polys
-  anps_ras_fp <- str_c(tools::file_path_sans_ext(anps_fp), '.tif')
-  if(!file.exists(anps_ras_fp)){
-    # ANP polys
-    anps_polys <- terra::vect(anps_fp) 
-    anps_diss <- terra::aggregate(anps_polys, by='zone')
-    
-    # Get lookup table
-    anp_lu <- terra::values(anps_diss) %>% rownames_to_column('id') %>% 
-      select(id, name=zone)
-    anp_lu <- setNames(anp_lu$name, anp_lu$id)
-    
-    anp_lu
-    
-    # Rasterize and save
-    anps_ras <- terra::rasterize(anps_diss, rich_ras)
-    anps_ras %>% terra::writeRaster(anps_ras_fp, overwrite=T, 
-                                    options=c("dstnodata=-99999"),
-                                    wopt=list(gdal='COMPRESS=LZW'))
-  } else {
-    anps_ras <- terra::rast(anps_ras_fp)
-  }
+  fps <- list.files(file.path(pred_dir, 'richness'), '*\\.tif', full.names = TRUE)
+  rich_ras <- terra::rast(fps[[1]])
+      
+  # Rasterize ANP zones
+  anps <- rasterize_zones(anp_zones_fp, rich_ras, 
+                              field = 'zone', overwrite = TRUE)
   
-  # Biome polys
-  biom_ras_fp <- str_c(tools::file_path_sans_ext(biom_diss_fp), '.tif')
-  if(!file.exists(biom_ras_fp)){
-    # Load polygons and dissolve
-    biom_polys <- terra::vect(biom_diss_fp) 
-    biom_diss <- terra::aggregate(biom_polys, by='DESECON1')
-    
-    # Get lookup table
-    biom_lu <- terra::values(biom_diss) %>% rownames_to_column('id') %>% 
-      select(id, name=DESECON1)
-    biom_lu <- setNames(biom_lu$name, biom_lu$id)
-  
-    # Rasterize and save
-    biom_ras <- terra::rasterize(biom_diss, rich_ras)
-    biom_ras %>% terra::writeRaster(biom_ras_fp, overwrite=T, 
-                                    options=c("dstnodata=-99999"),
-                                    wopt=list(gdal='COMPRESS=LZW'))
-  } else {
-    biom_ras <- terra::rast(biom_ras_fp)
-  }
-  
-  # Land use polys
-  usv_ras_fp <- str_c(tools::file_path_sans_ext(usv_fp), '.tif')
-  if(!file.exists(usv_ras_fp)){
-    # Load polygons
-    usv_polys <- terra::vect(usv_fp)
+  # Rasterize ecoregions
+  biom <- rasterize_zones(biom_diss_fp, rich_ras, 
+                              field = 'DESECON1', overwrite = TRUE)
 
-    # Get lookup table
-    usv_lu <- terra::values(usv_polys) %>% 
-      rownames_to_column('id') %>% 
-      select(id, name=tipo)
-    usv_lu <- setNames(usv_lu$name, usv_lu$id)
-  
-    # Rasterize and save
-    usv_ras <- terra::rasterize(usv_polys, rich_ras)
-    usv_ras %>% terra::writeRaster(usv_ras_fp, 
-                                 overwrite=T, options=c("dstnodata=-99999"), 
-                                 wopt=list(gdal='COMPRESS=LZW'))
-  } else {
-    usv_ras <- terra::rast(usv_ras_fp)
-  }
-  
+  # Rasterize landcover
+  # usv_fn <- 'usv250s6gw_diss_3class.gpkg'
+  # usv_fp <- file.path(zone_polys_dir, usv_fn)
+  # biom <- rasterize_zones(biom_diss_fp, rich_ras, 
+  #                             field = 'DESECON1', overwrite = TRUE)
+
   # Combine zone rasters
-  combo_ras <- c(anps_ras, biom_ras, usv_ras)
-  names(combo_ras) <- c('anp_zone', 'biome', 'usv')
+  combo_ras <- c(anps$r, biom$r)
+  names(combo_ras) <- c('anp_zone', 'biome')
   
-  combo_ras %>% terra::writeRaster(zones_ras_fp, 
-                                 overwrite=T, options=c("dstnodata=-99999"), 
-                                 wopt=list(gdal='COMPRESS=LZW'))
+  combo_ras %>% terra::writeRaster(zones_ras_fp, overwrite=T)
   
-  saveRDS(list(anp=anp_lu, biom=biom_lu, usv=usv_lu), file=zones_lu_fp)
+  # Save lookup tables
+  saveRDS( list(anp = anps$lu, biom = biom$lu), file=zones_lu_fp)
 } 
 ```
 
@@ -430,7 +374,6 @@ var2_code <- 'ANPzone'
 fn <- str_c('grpdiffs_', fn_prefix, '_', var2_code, '_', grp_var, '.rds')
 grp_diffs_fp <- file.path(div_dir, fn)
 sum2 <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=FALSE)
-
 ```
 
 ```{r plot-usv-x-anp, fig.width=7, fig.height=8, cache=T}
@@ -516,28 +459,6 @@ var2 <- 'usv'
 fn <- str_c('grpdiffs_', fn_prefix, '_', var2, '_', grp_var_code, '.rds')
 grp_diffs_fp <- file.path(div_dir, fn)
 sum2 <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=FALSE)
-
-# if(!file.exists(grp_diffs_fp)){
-#   
-#   # Get group differences for each combination of biome and ANP zone
-#   df_nest <- df_samp %>% group_by(pol_group, biome, .data[[var2]]) %>% nest()
-#   sum2 <- df_nest %>%
-#     mutate(sum = purrr::map(data, get_grp_diffs, grp_var)) %>%
-#     select(-data) %>% 
-#     unnest(cols=sum)
-#   
-#   sg_levels <- sort(as.character(unique(sum2$sig_group)))
-#   sum2 <- sum2 %>%
-#     mutate(sig_group = factor(sig_group, levels = sg_levels))
-#   
-#   # Save 
-#   sum2 %>% saveRDS(grp_diffs_fp)
-#   
-# } else {
-#   
-#   sum2 <- readRDS(grp_diffs_fp)
-#   
-# }
 ```
 
 ```{r plot-anp-x-usv, fig.height=8, fig.width=7, cache=TRUE}
@@ -598,14 +519,12 @@ if(!file.exists(fig_fp)) ggsave(fig_fp, height=8)
 
 ```{r compare-anp, fig.width=7, fig.height=4, cache=T}
 grp_var <- 'anp_zone'
+grp_var_code <- 'ANPzone'
 var2 <- NA
+var2_code <- 'noUSV'
 
 # File name
-fn <- str_c('grpdiffs_samp', samp_n, '_', 
-            grp_var, '_', 'noUSV_',
-            rich_code, '_', 
-            dfilt_code, '_', nspecies, 'species_',
-            length(levels(div_df$pol_group)), 'pols.rds')
+fn <- str_c('grpdiffs_', fn_prefix, '_', var2_code, '_', grp_var_code, '.rds')
 grp_diffs_fp <- file.path(div_dir, fn)
 
 if(!file.exists(grp_diffs_fp)){
@@ -653,15 +572,32 @@ medians_anp %>%
     labs(caption = "Different colors within one facet indicate statistically significant (p < 0.05) difference between groups.")
 
 # Save figure
-fig_dir <- here::here('figures', 'diversity_by_zones')
-fig_fp <- file.path(fig_dir, dfilt_code,
-                    str_c('grpdiffs_samp', samp_n, '_', 
-                          grp_var, '_', 'noUSV_',
-                          rich_code, '_', 
-                          dfilt_code, '_', 
-                          nspecies, 'species_',
-                          length(levels(div_df$pol_group)), 'pols.png'))
+fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '.png')
 if(!file.exists(fig_fp)) ggsave(fig_fp, width=9, height=4)
+
+
+# Plot only bees
+medians_anp %>% 
+  filter(pol_group == 'bee') %>% 
+  plot_pollin_facet('All', var2='pol_group', grp_var=grp_var) +
+    scale_x_continuous(n.breaks= 4) +
+    theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(margin= margin(t=6, unit='pt')),
+        axis.text.x = element_text(hjust=c(0, 0.5, 1)), 
+        plot.title = element_blank(), 
+        legend.position = 'bottom', 
+        legend.box.spacing = unit(1, 'pt'),
+        strip.text = element_text(size=rel(0.8)),
+        panel.background = element_rect(fill=alpha('#A6A6A6', 0.3), 
+                                        color='white'),
+        panel.grid = element_line(color='lightgray'),
+        panel.grid.minor.x = element_line(color='lightgray')
+        ) +
+    labs(caption = "Different colors within one facet indicate statistically significant (p < 0.05) difference between groups.")
+
+# Save figure
+fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png')
+if(!file.exists(fig_fp)) ggsave(fig_fp, width=9, height=3)
 ```
 
 #### Compare by land cover without ANP zone
