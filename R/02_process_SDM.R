@@ -28,7 +28,7 @@ fps <- list.files(file.path(pred_dir, 'models'), '*.rds$', full.names = T) %>%
 pol_df3 <- pol_df2 %>% 
   left_join(fps, by = 'species') %>% 
   filter(is.na(mod_fp)) %>% 
-  # slice(1:113) %>%
+  slice(1:3) %>%
   mutate(
     mod_fp = purrr::map2(
       data, species, 
