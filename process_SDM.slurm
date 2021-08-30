@@ -14,7 +14,7 @@
 
 source activate R410
 
-srun Rscript /share/Part1/esturdivant/pol_v2/R/process_SDM_for_cluster.R
+srun Rscript /share/Part1/esturdivant/pol_v2/R/02_process_SDM.R
 
 #sleep(10)
 
