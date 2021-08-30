@@ -33,29 +33,15 @@ The result of the notebook is a collection of graphics displaying richness for e
 ```{r initialize, message=FALSE}
 # Load libraries and initialize variables
 source('R/initialize.R')
-library(rcompanion)
 
 samp_n <- 350
 # sessionInfo()
 
-# Directory paths
-dat_dir <- here::here('data', 'data_out')
-
-# Zones raster and lookup table
-zone_polys_dir <- file.path('data', 'tidy', 'analysis_zones', 'from_v1')
-zones_fn <- 'v1_stack_anps3_biomes7_usv3'
-zones_ras_fp <- file.path(zone_polys_dir, str_c(zones_fn, '.tif'))
-zones_lu_fp <- file.path(zone_polys_dir, str_c(zones_fn, '_lu.rds'))
-
-# Zones raster and lookup table
-zone_polys_dir <- file.path('data', 'tidy', 'analysis_zones')
-zones_fn <- 'stack_anp_biome_3x7'
-zones_ras_fp <- file.path(zone_polys_dir, str_c(zones_fn, '.tif'))
-zones_lu_fp <- file.path(zone_polys_dir, str_c(zones_fn, '_lu.rds'))
-
-# Directory for richness dataframes
-div_dir <- file.path(pred_dir, 'diversity_by_zones', zones_fn)
-dir.create(div_dir, recursive=TRUE, showWarnings = F)
+# # Zones raster and lookup table
+# zone_polys_dir <- file.path('data', 'tidy', 'analysis_zones', 'from_v1')
+# zones_fn <- 'v1_stack_anps3_biomes7_usv3'
+# zones_ras_fp <- file.path(zone_polys_dir, str_c(zones_fn, '.tif'))
+# zones_lu_fp <- file.path(zone_polys_dir, str_c(zones_fn, '_lu.rds'))
 ```
 
 Parameters:
@@ -65,52 +51,11 @@ Parameters:
 * filt_dates: **`r }filt_dates`**
 * buffer_distance: **`r buffer_distance` km**
 
-### Pre-process ANP, biome, and land use zones
-
-```{r pre-process, eval=TRUE}
-if(!file.exists(zones_ras_fp)){
-  
-  # Input pollinator richness 
-  fps <- list.files(file.path(pred_dir, 'richness'), '*\\.tif', full.names = TRUE)
-  rich_ras <- terra::rast(fps[[1]])
-      
-  # Rasterize ANP zones
-  anps <- rasterize_zones(anp_zones_fp, rich_ras, 
-                              field = 'zone', overwrite = TRUE)
-  
-  # Rasterize ecoregions
-  biom <- rasterize_zones(biom_diss_fp, rich_ras, 
-                              field = 'DESECON1', overwrite = TRUE)
-
-  # Rasterize landcover
-  # usv_fn <- 'usv250s6gw_diss_3class.gpkg'
-  # usv_fp <- file.path(zone_polys_dir, usv_fn)
-  # biom <- rasterize_zones(biom_diss_fp, rich_ras, 
-  #                             field = 'DESECON1', overwrite = TRUE)
-
-  # Combine zone rasters
-  combo_ras <- c(anps$r, biom$r)
-  names(combo_ras) <- c('anp_zone', 'biome')
-  
-  combo_ras %>% terra::writeRaster(zones_ras_fp, overwrite=T)
-  
-  # Save lookup tables
-  saveRDS( list(anp = anps$lu, biom = biom$lu), file=zones_lu_fp)
-} 
-```
-
 ### Richness data frames
 
 Convert rasters to dataframes of richness by ANP zone, biome, land cover, and pollinator group. 
 
 ```{r make div_df}
-# Load stacked zones
-combo_ras <- terra::rast(zones_ras_fp)
-
-# List richness tifs
-(fps <- list.files(file.path(pred_dir, 'richness'),
-                       '*\\.tif', full.names = TRUE))
-
 extract_stats_to_csv <- function(rich_tif_fp){
   
   # Resulting path for CSV
@@ -138,6 +83,13 @@ extract_stats_to_csv <- function(rich_tif_fp){
   
   return(div_df) 
 }
+
+# Load stacked zones
+combo_ras <- terra::rast(zones_ras_fp)
+
+# List richness tifs
+(fps <- list.files(file.path(pred_dir, 'richness'),
+                       '*\\.tif', full.names = TRUE))
 
 # Create/load DFs
 div_df1 <- fps %>% purrr::map_dfr(extract_stats_to_csv)

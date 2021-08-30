@@ -14,102 +14,6 @@
 source('R/initialize.R')
 
 # Functions --------------------------------------------------------------------
-get_diversity_for_zone_polys <- function(df, zone_polys, zone_str=NA, polys_id_fld, 
-                                         polys_area_fld='area_ha'){
-  
-  df <- df %>% 
-    # Group pollinator points by intersecting ANP 
-    st_transform(crs = st_crs(zone_polys)) %>% 
-    st_join(zone_polys, left=F) %>% {
-      if(nrow(.) > 0) {
-        
-        # Get diversity and abundance of species
-        get_diversity_metrics(., polys_id_fld, polys_area_fld)
-        
-      } else {
-        
-        # Make empty tibble if there are no pollinators in the given zone
-        tibble(!!polys_id_fld := character(), !!polys_area_fld := numeric())
-        
-      } 
-    }
-  
-  # Get just the polygon ID and area
-  all_ids <- zone_polys %>% 
-    st_drop_geometry() %>% 
-    select(.data[[polys_id_fld]], .data[[polys_area_fld]])
-  
-  # Join so that we have NA anywhere statistics are missing
-  df <- full_join(all_ids, df)
-  
-  if(!is.na(zone_str)){
-    
-    df <- mutate(df, zone = zone_str)
-    
-  }
-  
-  # Return
-  return(df)
-  
-}
-
-get_pollinators_in_anp_zones <- function(name, date_range, anps_terr, 
-                                         buffer_distance, 
-                                         polys_id_fld='rowname', 
-                                         polys_area_fld = 'area_ha',
-                                         pol_dir = 'data/data_out/pollinator_points'){
-  
-  # Zone codes
-  inside_str <- str_c('Inside NPA')
-  buff_str <- str_c('Buffer ', buffer_distance, ' km')
-  outside_str <- str_c('Outside buffer')
-  
-  # Convert date range
-  date_min <- as.POSIXct(str_c(date_range[[1]], "-01-01"))
-  date_max <- as.POSIXct(str_c(date_range[[2]], "-12-31"))
-  
-  # Load pollinator file
-  pol_fp <- file.path(pol_dir, str_c(name, '.geojson'))
-  df <- st_read(pol_fp) %>% 
-    # Filter to date range
-    filter(eventDate >= date_min & eventDate <= date_max) 
-  
-  # Get diversity and abundance of pollinators within NPA ----
-  anps_inside <- get_diversity_for_zone_polys(df, anps_terr, inside_str, 
-                                              polys_id_fld, polys_area_fld)
-  
-  # NPA buffer ----
-  anps_buff <- get_buffer_conditional(buffer_distance, anps_terr, area_fld='area_ha')
-  
-  # Get diversity and abundance of pollinators in NPA buffer
-  anps_buffer <- get_diversity_for_zone_polys(df, anps_buff, buff_str, 
-                                              polys_id_fld, polys_area_fld)
-  
-  # Voronoi polygons ----
-  vpols <- get_voronois_conditional(anps_terr, buffer_distance)
-  
-  # Get diversity and abundance of pollinators outside NPA buffer
-  anps_outside <- get_diversity_for_zone_polys(df, vpols, outside_str, 
-                                               polys_id_fld, polys_area_fld)
-  
-  # Concatenate the three DFs
-  anps_df <- bind_rows(anps_inside, anps_buffer, anps_outside)
-  
-  # Set pollinator group name
-  anps_df$pol_group <- name
-  
-  # Save
-  fp_out <- file.path('data/data_out/ANPs', 
-                      str_c('anps_', name, '_', strftime(date_min, format="%Y"), 
-                            '_to_', strftime(date_max, format="%Y"), '_buffer', 
-                            buffer_distance, 'km.csv'))
-  anps_df %>% write_csv(fp_out)
-  
-  # Return
-  return(anps_df)
-}
-
-# Newer functions ----
 #' @export
 clean_anps_conditional <- function(anp_fp, anp_terr_fp, crs, mex, overwrite = FALSE) {
   
@@ -340,32 +244,7 @@ merge_anp_zones_conditional <- function(bind_fp, anps_terr, anps_buff, vpols, bu
   return(anp_zones)
 }
 
-get_zone_diversity <- function(pol_group, date_range, zone_polys, zone_id_fld) {
-  # Dates
-  date_min <- as.POSIXct(str_c(date_range[[1]], "-01-01"))
-  date_max <- as.POSIXct(str_c(date_range[[2]], "-12-31"))
-  
-  # Load pollinator file
-  pol_dir <- 'data/data_out/pollinator_points/with_duplicates'
-  pol_fp <- file.path(pol_dir, str_c(pol_group, '.gpkg'))
-  pol_df1 <- st_read(pol_fp) %>% 
-    # Filter to date range
-    filter(eventDate >= date_min & eventDate <= date_max) 
-  
-  zone_div <- pol_df1 %>%
-    get_diversity_for_zone_polys(zone_polys, polys_id_fld=zone_id_fld) %>%
-    left_join(st_drop_geometry(zone_polys))
-  
-  zone_div$pol_group <- pol_group
-  
-  return(zone_div)
-}
-
 # Load data --------------------------------------------------------------------
-# # Biomes
-# shp_fp <- 'data/input_data/environment_variables/CONABIO/ecort08gw.shp'
-# biomes <- st_read(shp_fp)
-
 # Mexico
 mex <- st_read(mex_fp) %>% 
   st_transform(crs=crs) %>% 
@@ -373,9 +252,7 @@ mex <- st_read(mex_fp) %>%
 
 mex0 <- st_union(mex)
 
-# ANP polygons ----
-anps_terr <- clean_anps_conditional(anps_in_fp, anp_terr_fp, crs, mex) %>% 
-  st_transform(crs=crs)
+# ANP polygons -----------------------------------------------------------------
 anps_terr <- clean_anps_conditional(anps_in_fp, anp_terr_fp, crs, mex0) %>% 
   st_transform(crs=crs)
 
@@ -396,413 +273,74 @@ anp_zones <- merge_anp_zones_conditional(bind_fp, anps_terr, anps_buff,
 # Ecoregions --------------------------------------------------------
 # Biomes CONABIO 
 biom_diss <- get_biomes_conditional(biom_diss_fp, 
-                                    biom_dir='data/input_data/environment_variables/CONABIO', 
+                                    biom_dir = biom_dir, 
                                     mex)
 
-# # Land cover ----
-# # Land cover from INEGI via CONABIO
-# fp_usv <- "data/input_data/ag_INEGI_2017/other_sources/usv250s6gw.shp"
-# 
-# # Output files
-# # grp_name
-# usv_fname <- tools::file_path_sans_ext(basename(fp_usv))
-# # crop_class_fp <- file.path("data/intermediate_data/ag_by_region", 
-# #                            str_c(str_c(usv_fname, 'tipo', '7classes', 
-# #                                        str_c(grp_name, collapse=''), 
-# #                                        sep='_'), '.gpkg'))
-# # 
-# 
-# # Load file
-# usv1 <- st_read(fp_usv) %>% 
-#   st_make_valid() %>% 
-#   st_transform(crs)
-# 
-# usv2 <- usv1 %>% 
-#   # st_crop(sub1) %>%
-#   st_simplify(dTolerance=40, preserveTopology=T)
-# 
-# usv2 %>% object.size() %>% print(units='MB')
-# 
-# # classify into 7 classes
-# usv3 <- usv2 %>% 
-#   mutate(tipo = case_when(
-#     str_detect(DESCRIPCIO, 'INDUCIDO$') ~ 'inducido',
-#     str_detect(DESCRIPCIO, '^PASTIZAL') ~ 'pastizal',
-#     str_detect(CVE_UNION, '^V|^B|^S|^P') ~ 'vegetacion',# bosque, selva, pastizal, sabana, palmar, etc.
-#     str_detect(DESCRIPCIO, '^AGRICULTURA') ~ 'agricultura', # does not include shifting cultivation (nómada)
-#     str_detect(CVE_UNION, '^ACUI|^H2O') ~ 'agua',
-#     str_detect(CVE_UNION, '^ADV|^DV') ~ 'sin_veg',
-#     str_detect(CVE_UNION, '^AH') ~ 'construido',
-#     TRUE ~ 'otro'
-#   ))
-# 
-# usv %>% object.size() %>% print(units='MB')
-# 
-# # # Save
-# # usv %>% st_write(crop_class_fp, delete_dsn=T)
-# # usv <- sf::st_read(crop_class_fp)
-# 
-# # Reclass and dissolve
-# key <- c(inducido='veg', pastizal='veg', vegetacion='veg', agricultura='ag', 
-#          agua='otro', sin_veg='otro', construido='otro')
-# usv_diss1 <- usv3 %>% 
-#   mutate(tipo =  recode(tipo, !!!key)) %>% 
-#   group_by(tipo) %>% 
-#   summarize()
-# 
-# usv_diss2 <- usv_diss1 %>% 
-#   st_simplify(dTolerance=40, preserveTopology=T)
-# 
-# usv_diss3 <- usv_diss2 %>% 
-#   nngeo::st_remove_holes(100000) 
-# 
-# usv_diss2 %>% object.size() %>% print(units='MB')
-# 
-# # Save dissolved USV ----
-# usv_fname <- tools::file_path_sans_ext(basename(fp_usv))
-# diss_fp <- file.path("data/intermediate_data",
-#                      str_c(str_c(usv_fname, 'diss', '3class',
-#                                  sep='_'), '.gpkg'))
-# usv_diss2 %>% st_write(diss_fp, delete_dsn=T)
-# 
-# # Load dissolved land cover (3 classes) ----
-# usv_diss <- st_read(diss_fp)
-# 
-# # Get shifting agriculture ----
-# # nma_fp <- file.path("data/intermediate_data/ag_by_region", 'polys_nma_ChiapasTabasco.gpkg')
-# # fn <- str_c(str_c(tools::file_path_sans_ext(basename(fp_usv)), 
-# #                   'diss', '4class', 'nma', str_c(grp_name, collapse=''), sep='_'), '.gpkg')
-# # diss_nma_fp <- file.path("data/intermediate_data/ag_by_region", fn)
-# # 
-# # # Get all agriculture subset to region
-# # fn <- str_c(str_c('polys_ag_INEGI', str_c(grp_name, collapse=''), sep='_'), '.gpkg')
-# # fp <- file.path("data/intermediate_data/ag_by_region", fn)
-# # 
-# # if(file.exists(fp)) {
-# #   
-# #   polys <- st_read(fp)
-# #   
-# # } else {
-# #   
-# #   polys_fp <- file.path("data/intermediate_data", 'polys_ag_INEGI.gpkg')
-# #   polys <- st_read(polys_fp) %>% 
-# #     st_filter(sub1)
-# #   
-# #   polys %>% st_write(fp)
-# #   
-# # }
-# # 
-# # # Dissolve shifting agriculture polygons
-# # nma_diss <- polys %>% 
-# #   filter(CLAVE == 'NMA') %>% 
-# #   st_crop(sub1) %>% 
-# #   group_by() %>% 
-# #   summarize() %>% 
-# #   transmute(tipo='ag_nma')
-# # 
-# # # Save
-# # nma_diss %>% st_write(nma_fp, delete_dsn=T)
-# # 
-# # # Load
-# # nma_diss <- st_read(nma_fp)
-# # 
-# # # Add shifting ag to land cover
-# # diss_wo_nma <- st_difference(usv_diss, nma_diss)
-# # usv_nma <- bind_rows(diss_wo_nma, nma_diss)
-# # 
-# # # Save
-# # usv_nma %>% st_write(diss_nma_fp)
-# 
-# 
-# # Biome subset ================================================
-# # Select biome
-# biom_list <- biom_diss %>% st_drop_geometry %>% distinct %>% deframe
-# (biom_name <- biom_list[[7]])
-# biom1 <- biom_diss %>% 
-#   filter(DESECON1==biom_name)
-# 
-# # Intersect ANP zones with biome subset
-# anp_zones_biom1 <- st_intersection(anp_zones, biom1) %>% 
-#   st_make_valid() %>% 
-#   st_cast('MULTIPOLYGON') %>% 
-#   st_cast('POLYGON')
-# anp_zones_biom1$area_ha <- st_area(anp_zones_biom1) %>% set_units('ha') %>% set_units(NULL)
-# 
-# 
-# # Intersect ANP zones with biome subset
-# diss_biom_fp <- file.path("data/intermediate_data", 
-#                           str_replace_all(biom_name, ' |-', ''),
-#                           str_c(str_c(usv_fname, 'diss', '3class', 
-#                                       str_replace_all(biom_name, ' |-', ''),
-#                                       sep='_'), '.gpkg'))
-# 
-# if(!file.exists(diss_biom_fp)) {
-#   usv_biom1 <- st_intersection(usv_diss, biom1) %>% 
-#     st_simplify(dTolerance=40, preserveTopology=T) %>% 
-#     nngeo::st_remove_holes(1000000) 
-#   usv_biom1$area_ha <- st_area(usv_biom1) %>% set_units('ha') %>% set_units(NULL)
-#   
-#   # Save
-#   dir.create(dirname(diss_biom_fp))
-#   usv_biom1 %>% st_write(diss_biom_fp, delete_dsn=T)
-# }
-# 
-# usv_biom1 <- st_read(diss_biom_fp) %>% 
-#   st_make_valid() %>% 
-#   st_cast('MULTIPOLYGON') %>% 
-#   st_cast('POLYGON')
-# 
-# usv_biom1 %>% object.size() %>% print(units='MB')
-# 
-# # Look
-# tm_shape(usv_biom1) + tm_polygons(alpha=.5)
-# tm_shape(anp_zones_biom1) + tm_polygons(alpha=.5)
-# 
-# # Intersect USV with ANP zones ----
-# biom_zone_fp <- file.path("data/intermediate_data", 
-#                           str_replace_all(biom_name, ' |-', ''),
-#                           str_c(str_c('ixn_ANPs_usv3_diss', 
-#                                       str_replace_all(biom_name, ' |-', ''),
-#                                       str_glue('buff{buffer_distance}km'),
-#                                       sep='_'), '.gpkg'))
-# 
-# if(!file.exists(biom_zone_fp)) {
-#   biom1_zones1 <- st_intersection(anp_zones_biom1, select(usv_biom1, tipo))
-#   
-#   # Zone codes
-#   inside_str <- str_c('Inside NPA')
-#   buff_str <- str_c('Buffer ', buffer_distance, ' km')
-#   outside_str <- str_c('Outside buffer')
-#   
-#   lu <- setNames(c('anp', 'buff', 'out'), 
-#                  c(inside_str, buff_str, outside_str)) 
-#   
-#   biom1_zones2 <- biom1_zones1 %>% 
-#     st_collection_extract('POLYGON') %>%
-#     st_cast('MULTIPOLYGON') %>% 
-#     st_cast('POLYGON') %>% 
-#     group_by(zone, tipo) %>% 
-#     summarize() %>% 
-#     mutate(zone = recode(zone, !!!lu),
-#            name = str_c(zone, tipo, sep='_'))
-#   
-#   biom1_zones2$area_ha <- st_area(biom1_zones2) %>% set_units('ha') %>% set_units(NULL)
-#   
-#   # Save
-#   biom1_zones2 %>% st_write(biom_zone_fp, delete_dsn=T)
-#   
-# }
-# 
-# # Load
-# biom1_zones <- st_read(biom_zone_fp)
-# 
-# tm_shape(biom1_zones) + tm_polygons(alpha=.5)
+# Land cover ----
+# Land cover from INEGI via CONABIO
+# Load file
+usv1 <- st_read(fp_usv) %>%
+  st_make_valid() %>%
+  st_transform(crs) %>%
+  st_simplify(dTolerance=40, preserveTopology=T)
 
-# ~~~Pollinator points~~~ ----
-# Diversity dataframe for ANP zone, biome, land use sites ----
-# Date range
-date_range <- c(2000, 2020)
-pol_groups <- c('Abejas', 'Avispas', 'Colibries', 'Mariposas', 'Moscas', 'Murcielagos')
+# classify into 7 classes
+usv7 <- usv1 %>%
+  mutate(tipo = case_when(
+    str_detect(DESCRIPCIO, 'INDUCIDO$') ~ 'inducido',
+    str_detect(DESCRIPCIO, '^PASTIZAL') ~ 'pastizal',
+    str_detect(CVE_UNION, '^V|^B|^S|^P') ~ 'vegetacion',# bosque, selva, pastizal, sabana, palmar, etc.
+    str_detect(DESCRIPCIO, '^AGRICULTURA') ~ 'agricultura', # does not include shifting cultivation (nómada)
+    str_detect(CVE_UNION, '^ACUI|^H2O') ~ 'agua',
+    str_detect(CVE_UNION, '^ADV|^DV') ~ 'sin_veg',
+    str_detect(CVE_UNION, '^AH') ~ 'construido',
+    TRUE ~ 'otro'
+  ))
 
-# Biome subset
-biom_list <- biom_diss %>% st_drop_geometry %>% distinct %>% deframe
-fps <- list.files(path="data/intermediate_data", 
-  str_glue("ixn_ANPs_usv3_diss_.+_buff{buffer_distance}km.gpkg"), recursive=T, 
-  full.names=T)
+usv7 <- usv7 %>%
+  group_by(tipo) %>%
+  summarize() %>%
+  st_simplify(dTolerance=40, preserveTopology=T) %>%
+  nngeo::st_remove_holes(100000)
 
-for(biom_zone_fp in fps) {
-  biom_code <- basename(dirname(biom_zone_fp))
-  biom_name <- agrep(biom_code, biom_list, value=T)
-  
-  zone_polys <- st_read(biom_zone_fp)
-  zone_id_fld <- 'name'
-  polys_area_fld <- 'area_ha'
-  
-  # Pollinators subset
-  pol_div <- pol_groups %>% 
-    map_dfr(get_zone_diversity, date_range, zone_polys, zone_id_fld) %>% 
-    mutate(rich_by_1kkm = richness_norm*1000, 
-           biome = biom_name)
-  
-  pol_div_fp <- file.path("data/data_out/diversity_by_zones", 
-                          str_c(str_c('div_ANPs_usv3', biom_code, 
-                                      str_glue('buff{buffer_distance}km'),
-                                      sep='_'), '.gpkg'))
-  pol_div %>% write_csv(pol_div_fp)
-  
-  fig_dir <- 'figures/anps_and_pollinator_exploration/con_biomas_y_usv'
-  
-  pol_div %>% 
-    # filter(pol_group %in% c('Abejas', 'Colibries', 'Mariposas', 'Murcielagos')) %>% 
-    ggplot(., aes(fill=tipo, x=zone, y=rich_by_1kkm)) +
-    geom_bar(position='dodge', stat='identity') +
-    scale_fill_manual(values=c("#E69F00", "#CC79A7", "#009E73"), "Uso de suelo") +
-    facet_wrap(facets=vars(pol_group)) +
-    ggtitle(biom_name)
-  
-  ggsave(file.path(fig_dir, str_c('bar_usv_', biom_code, '_buff',
-                                  buffer_distance, 
-                                  'km.png')), 
-         width = 5.15, height=5.03)
-}
-# 
-# # Get Jaccard distance - diversity and abundance of pollinators ----
-# pol_df2 <- pol_df1 %>% 
-#   # Group pollinator points by intersecting ANP 
-#   st_transform(crs = st_crs(zone_polys)) %>% 
-#   st_join(zone_polys, left=F)
-# 
-# # Group by ANP and pivot wide (separate column with count for each species)
-# spec_df1 <- pol_df2 %>% 
-#   st_drop_geometry %>% 
-#   group_by(.data[[zone_id_fld]], .data[[polys_area_fld]], species) %>% 
-#   summarize(n = length(species)) %>% 
-#   ungroup 
-# 
-# spec_df2 <- spec_df1 %>% 
-#   pivot_wider(id_cols = all_of(c(zone_id_fld, polys_area_fld)), 
-#               names_from = species, 
-#               values_from = n) %>%
-#   replace(is.na(.), 0) %>% 
-#   select(-area_ha) %>% 
-#   left_join(st_drop_geometry(zone_polys)) %>% 
-#   # mutate(name = str_c(abbreviate(DESECON1, use.classes=T), '_', rowname)) %>% 
-#   column_to_rownames('name') %>%
-#   select(-any_of(c('rowname', 'ID_ANP', polys_area_fld, 'DESECON1', 'zone', 'tipo')))
-# 
-# # Get distance matrix (Jaccard)
-# df.jaccard <- vegan::vegdist(spec_df2, method="jaccard")
-# 
-# # Tree plot
-# plot(hclust(df.jaccard),
-#      hang = .2,
-#      main = str_glue("{biom_name} sites \nclustered by Jaccard similarity"),
-#      axes = FALSE,
-#      ylab = "")
-# 
-# ggdendro::ggdendrogram(hclust(df.jaccard), rotate=T, size=2)
-#  
-# # Euclidean distance
-# df.euclidean <- dist(spec_df2)
-# 
-# # Display using non-metric multidimensional scaling
-# mdsE <- vegan::metaMDS(spec_df2, distance='euc')
-# plot(mdsE, display="sites", type="text")
-# 
-# # Bray-Curtis
-# mdsB <- vegan::metaMDS(spec_df2, distance="bray", autotransform=FALSE, trace=0)
-# plot(mdsB, display="sites", type="text")
+# Save dissolved USV 
+usv7 %>% st_write(lc_7clas_fp, delete_dsn=T)
 
-# Combine diversity DFs into one ----
-fps <- list.files(path="data/data_out/diversity_by_zones",
-                  pattern=str_c('div_ANPs_usv3_[^singlepart].+_buff', 
-                                buffer_distance, 'km.csv'), 
-                  full.names = T)
-div_df <- map_dfr(fps, read_csv)
+# Reclass and dissolve to Veg, Ag, and Other
+key <- c(inducido='veg', pastizal='veg', vegetacion='veg', agricultura='ag',
+         agua='otro', sin_veg='otro', construido='otro')
+usv3 <- usv7 %>%
+  mutate(tipo =  recode(tipo, !!!key)) %>%
+  group_by(tipo) %>%
+  summarize() %>%
+  st_simplify(dTolerance=40, preserveTopology=T) %>%
+  nngeo::st_remove_holes(100000)
 
-# Plot
-div_df %>% 
-  filter(pol_group %in% c('Abejas', 'Colibries', 'Mariposas', 'Murcielagos')) %>%
-  ggplot(., aes(fill=tipo, x=zone, y=rich_by_1kkm)) +
-  geom_bar(position='dodge', stat='identity') +
-  scale_fill_manual(values=c("#E69F00", "#CC79A7", "#009E73"), "Uso de suelo") +
-  facet_grid(vars(pol_group), vars(biome), 
-             scales='free_y')
+# Save dissolved USV 
+usv3 %>% st_write(lc_3clas_fp, delete_dsn=T)
 
-ggsave(file.path(fig_dir, str_c('bar_usv_ALL4_buff',
-                                buffer_distance, 
-                                'km.png')), 
-       width = 9.15, height=7.03)
+# Convert to raster and stack ----
+# Input pollinator richness 
+fps <- list.files(file.path(pred_dir, 'richness'), '*\\.tif', full.names = TRUE)
+rich_ras <- terra::rast(fps[[1]])
 
-# Plot
-div_df %>% 
-  filter(pol_group %in% c('Abejas', 'Colibries', 'Mariposas', 'Murcielagos')) %>%
-  ggplot(., aes(fill=zone, x=tipo, y=rich_by_1kkm)) +
-  geom_bar(position='dodge', stat='identity') +
-  scale_fill_manual(values=c("#E69F00", "#CC79A7", "#009E73"), "Zona") +
-  facet_grid(vars(pol_group), vars(biome), 
-             scales='free_y')
+# Rasterize ANP zones
+anps <- rasterize_zones(anp_zones_fp, rich_ras, 
+                        field = 'zone', overwrite = TRUE)
 
-ggsave(file.path(fig_dir, str_c('bar_zona_ALL4_buff',
-                                buffer_distance, 
-                                'km.png')), 
-       width = 9.15, height=7.03)
+# Rasterize ecoregions
+biom <- rasterize_zones(biom_diss_fp, rich_ras, 
+                        field = 'DESECON1', overwrite = TRUE)
 
-# Get diversity for undissolved polygons ----
-biom_list <- biom_diss %>% st_drop_geometry %>% distinct %>% deframe
-zone_id_fld <- 'name'
-polys_area_fld <- 'area_ha'
+# Rasterize landcover
+usv <- rasterize_zones(usv_diss_fp, rich_ras, 
+                        field = 'tipo', overwrite = TRUE)
 
-for(biom_name in biom_list){
-  biom_zone_fp <- file.path("data/intermediate_data", 
-                            str_replace_all(biom_name, ' |-', ''),
-                            str_c(str_c('ixn_ANPs_usv3_diss', 
-                                        str_replace_all(biom_name, ' |-', ''),
-                                        str_glue('buff{buffer_distance}km'),
-                                        sep='_'), '.gpkg'))
-  biom1_zones <- st_read(biom_zone_fp)
-  
-  # Biome subset
-  zone_polys <- biom1_zones %>% 
-    st_cast('POLYGON')
-  zone_polys$area_ha <- st_area(zone_polys) %>% set_units('ha') %>% set_units(NULL)
-  
-  # Pollinators subset
-  pol_div <- pol_groups %>% 
-    map_dfr(get_zone_diversity, date_range, zone_polys, zone_id_fld) %>% 
-    mutate(rich_by_1kkm = richness_norm*1000, 
-           biome = biom_name)
-  
-  pol_div_fp <- file.path("data/data_out/diversity_by_zones", 
-                          str_c(str_c('div_ANPs_usv3_singlepart', 
-                                      str_replace_all(biom_name, ' |-', ''),
-                                      str_glue('buff{buffer_distance}km'),
-                                      sep='_'), '.csv'))
-  pol_div %>% write_csv(pol_div_fp)
-  
-}
+# Combine zone rasters
+combo_ras <- c(anps$r, biom$r, usv$r)
+names(combo_ras) <- c('anp_zone', 'biome', 'landcover')
 
-# Combine DFs for all biomes (singlepart) ----
-fps <- list.files("data/data_out/diversity_by_zones", 
-           pattern=str_glue('div_ANPs_usv3_singlepart.+buff{buffer_distance}km.gpkg'), 
-           full.names = T)
-div_df <- map_dfr(fps, read_csv)
+combo_ras %>% terra::writeRaster(zones_ras_fp, overwrite=T)
 
-div_single_fp <- file.path("data/data_out/diversity_by_zones", 
-                           str_glue('div_ANPs_usv3_singlepart_buff{buffer_distance}km.csv'))
-div_df %>% write_csv(div_single_fp)
-
-# Multivariate regression ----
-div_df <- read_csv(div_single_fp)
-
-div_df1 <- div_df %>% filter(!is.na(richness_norm)) 
-
-model <- lm(rich_by_1kkm ~ biome + zone + tipo, data=div_df1)
-summary(model)
-car::Anova(model)
-
-# Individual pollinator groups
-div_df2 <- div_df1 %>% 
-  filter(pol_group == 'Murcielagos') 
-model <- lm(rich_by_1kkm ~ biome + zone + tipo, data=div_df2)
-summary(model)
-car::Anova(model)
-
-# Individual pollinator groups
-div_df2 <- div_df1 %>% 
-  filter(biome == 'Selvas Calido-Humedas',
-         pol_group == 'Abejas') 
-model <- lm(rich_by_1kkm ~ zone + tipo, data=div_df2)
-summary(model)
-car::Anova(model)
-
-# Individual pollinator groups
-div_df2 <- div_df1 %>% 
-  filter(biome == 'Sierras Templadas',
-         pol_group == 'Abejas',
-         zone == 'buff') 
-model <- lm(rich_by_1kkm ~ tipo, data=div_df2)
-summary(model)
-car::Anova(model)
-
-
+# Save lookup tables
+saveRDS( list(anp = anps$lu, biom = biom$lu, landcover = usv$lu), file=zones_lu_fp)

@@ -1,5 +1,5 @@
 # Este código tiene los parametros y las funciones que usan los demás procesos. 
-# Los otro códigos corren este al principio con la línea:
+# Los otros códigos corren este al principio con la línea:
 # source('R/initialize.R')
 
 # Load libraries ----
@@ -11,6 +11,7 @@ library('dismo')
 library('raster') # use raster for compatibility with dismo
 library('stars')
 library('sf')
+library('rcompanion')
 library('tidyverse')
 library('purrr')
 
@@ -35,19 +36,6 @@ pts_dir <- 'data/tidy/pollinator_points'
 pts_nested_rds <- file.path(pts_dir, 'points_nested_species.rds')
 filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))
 
-# analysis zones
-anps_in_fp <- 'data/input_data/context_Mexico/ap_temp1_ANPs.gpkg'
-zones_dir <- 'data/tidy/analysis_zones'
-anp_dir <- file.path(zones_dir, 'ANPs')
-dir.create(anp_dir, recursive = TRUE, showWarnings = FALSE)
-
-anp_terr_fp <- file.path(anp_dir, 'ANPs_terr_singlepart.gpkg')
-anp_zones_fp <- file.path(anp_dir, str_c('ANP_zones_buff', buffer_distance,'km.gpkg'))
-# anps_biom_fp <- file.path(anp_dir, 'ANPs_with_biomes.gpkg')
-
-biom_diss_fp <- file.path(zones_dir, 'biomes', 'ecoregions_diss7.gpkg')
-dir.create(dirname(biom_diss_fp), recursive = TRUE, showWarnings = FALSE)
-
 # Predictor layers 
 # Function to create pred_dir path
 get_pred_dir <- function(unq_cells = TRUE,
@@ -69,30 +57,47 @@ get_pred_dir <- function(unq_cells = TRUE,
 # Paths
 var_code <- str_c(c( str_to_title(vars)), collapse = '')
 (pred_dir <- get_pred_dir(unq_cells = unq_cells,
-                         excludep = excludep,
-                         rf_vers = rf_vers,
-                         vars = vars,
-                         filt_dates = filt_dates))
+                          excludep = excludep,
+                          rf_vers = rf_vers,
+                          vars = vars,
+                          filt_dates = filt_dates))
 dir.create(pred_dir, recursive=T, showWarnings = F)
-
 
 # Environment variables
 crop_dir <- file.path('data', 'input_data', 'environment_variables', 'cropped')
 
+# analysis zones
+anps_in_fp <- 'data/input_data/context_Mexico/ap_temp1_ANPs.gpkg'
+zones_dir <- 'data/tidy/analysis_zones'
+
+anp_dir <- file.path(zones_dir, 'ANPs')
+dir.create(anp_dir, recursive = TRUE, showWarnings = FALSE)
+anp_terr_fp <- file.path(anp_dir, 'ANPs_terr_singlepart.gpkg')
+anp_zones_fp <- file.path(anp_dir, str_c('ANP_zones_buff', buffer_distance,'km.gpkg'))
+
+biom_dir = 'data/input_data/environment_variables/CONABIO'
+biom_diss_fp <- file.path(zones_dir, 'biomes', 'ecoregions_diss7.gpkg')
+dir.create(dirname(biom_diss_fp), recursive = TRUE, showWarnings = FALSE)
+
+fp_usv <- "data/input_data/INEGI_2017/usv250s6gw.shp"
+usv_fname <- tools::file_path_sans_ext(basename(fp_usv))
+lc_7clas_fp <- file.path(zones_dir, 'landcover', str_c(usv_fname, '_diss_7class.gpkg'))
+lc_3clas_fp <- file.path(zones_dir, 'landcover', str_c(usv_fname, '_diss_3class.gpkg'))
+
+# Zones raster and lookup table
+zone_polys_dir <- file.path(zones_dir, 'combined')
+zones_fn <- 'stack_anp_biome_usv_3x7x3'
+zones_ras_fp <- file.path(zone_polys_dir, str_c(zones_fn, '.tif'))
+zones_lu_fp <- file.path(zone_polys_dir, str_c(zones_fn, '_lu.rds'))
+
 # Mexico for masking and mapping
-# mex <- raster::getData('GADM', country='MEX', level=1, 
-#                        path='data/input_data/context_Mexico') %>% 
-#   st_as_sf()
-# mex0 <- raster::getData('GADM', country='MEX', level=0, 
-#                        path='data/input_data/context_Mexico') %>% 
-#   st_as_sf()
 mex_fp <- 'data/input_data/context_Mexico/SNIB_dest2018gw/dest2018gw.shp'
 mex <- st_read(mex_fp)
 mex0 <- st_union(mex)
 
-anp_fp <- 'data/input_data/context_Mexico/ap_temp1_ANPs.gpkg'
-anp_dir <- 'data/tidy/analysis_zones/ANPs'
-anp_terr_fp <- file.path(anp_dir, 'ANPs_terr_singlepart.gpkg')
+# richness dataframes
+div_dir <- file.path(pred_dir, 'diversity_by_zones', zones_fn)
+dir.create(div_dir, recursive=TRUE, showWarnings = F)
 
 # Set extent for testing
 ext <- raster::extent(mex)
