@@ -7,7 +7,7 @@ if(sysinfo[['nodename']] == 'lanase.cluster') {
 }
 
 # Initialize
-source('R/initialize.R')
+source('R/00_initialize.R')
 save_pts <- FALSE
 
 # Load filtered points ----

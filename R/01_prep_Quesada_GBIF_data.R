@@ -1,8 +1,12 @@
 # Pre-process GBIF data compiled by Dr. Quesada's team
 
 # Initialize ----
-source('R/initialize.R')
+source('R/00_initialize.R')
+
+# Create folder for output points
 dir.create(pts_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Input pollinator data
 data_dir <- 'data/input_data/Quesada_bioclim_pol_y_cultivos'
 pts_dir_in <- file.path(data_dir, 'Completos')
 

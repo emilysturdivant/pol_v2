@@ -1,13 +1,10 @@
-# v2: using GBIF points that I downloaded
-# Input: points downloaded from GBIF in folder input_data/GBIF/family_order_query
-# Output: files in folder for current iteration of RF: data_out/sdm/rfX_params/query_term
 
 # Load libraries ----
-source('R/initialize.R')
+source('R/00_initialize.R')
 
 # Load filtered points ----
 pol_df2 <- readRDS(filt_pts_rds)
-pol_df2 %>% distinct(bee_nesting)
+pol_df2 %>% distinct(bee_sociality)
 pol_df2 <- pol_df2 %>%
   mutate(bee_sociality = str_replace_all(bee_sociality, 'solitary/social', 'solitary-social'))
 
@@ -64,7 +61,7 @@ stack_sdms_by_group <- function(df, out_dir, grp_var, mex, rf_vers) {
   full_join(rich_df, acc_df)
 }
 
-# Richness for all pollinator groups
+# Richness for all pollinator groups ----
 out_dir <- file.path(pred_dir, 'richness')
 pol_richness <- stack_sdms_by_group(pol_df3, out_dir, 'group', mex, rf_vers)
 

@@ -2,7 +2,7 @@
 # Output: files in folder for current iteration of RF: data_out/sdm/rfX_params/query_term
 
 # Load libraries ----
-source('R/initialize.R')
+source('R/00_initialize.R')
 
 # Load filtered points ----
 # filt_pts_rds <- file.path(pts_dir, str_c('points_nested_species_filt.rds'))

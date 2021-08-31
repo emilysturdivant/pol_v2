@@ -2,7 +2,7 @@
 # Compare richness differences by zones
 
 # Load libraries ----
-source('R/initialize.R')
+source('R/00_initialize.R')
 
 buffer_distance = 10
 rich_code = 'Likhd'
