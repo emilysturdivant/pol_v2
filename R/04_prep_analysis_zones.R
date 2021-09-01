@@ -326,7 +326,7 @@ rich_ras <- terra::rast(fps[[1]])
 
 # Rasterize ANP zones
 anps <- rasterize_zones(anp_zones_fp, rich_ras, 
-                        field = 'zone', overwrite = TRUE)
+                        field = 'zone', overwrite = FALSE)
 
 # Rasterize ecoregions
 biom <- rasterize_zones(biom_diss_fp, rich_ras, 
@@ -344,3 +344,14 @@ combo_ras %>% terra::writeRaster(zones_ras_fp, overwrite=T)
 
 # Save lookup tables
 saveRDS( list(anp = anps$lu, biom = biom$lu, landcover = usv$lu), file=zones_lu_fp)
+
+# Rasterize ANP IDs
+ras_fp <- str_c(tools::file_path_sans_ext(anp_terr_fp), '.tif')
+anp_ids <- rasterize_zones(anps_terr, rich_ras, 
+                           field = 'ID_ANP', 
+                           ras_fp = ras_fp, 
+                           overwrite = TRUE)
+
+lu <- readRDS(zones_lu_fp)
+lu$ID_ANP <- anp_ids$lu
+saveRDS( lu, file=zones_lu_fp)

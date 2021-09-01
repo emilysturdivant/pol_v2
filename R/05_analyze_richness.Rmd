@@ -1,7 +1,7 @@
 ---
 title: "Richness by combined zones"
 abstract: |
-  This is the abstract.
+  This notebook uses species richness layers created by SDM and polygons for three landscape variables to compare species richness distributions within the zones created by the three variables.  
 output: 
   html_document:
     code_folding: hide
@@ -34,7 +34,8 @@ The result of the notebook is a collection of graphics displaying richness for e
 # Load libraries and initialize variables
 source('R/00_initialize.R')
 
-samp_n <- 600
+samp_n <- 1000
+# samp_n <- NA
 # sessionInfo()
 
 caption <- "Different colors within one facet indicate statistically significant (p < 0.05) difference between groups."
@@ -60,20 +61,21 @@ Parameters:
 
 * unq_cells: **`r unq_cells`**
 * excludep: **`r excludep`**
-* filt_dates: **`r }filt_dates`**
+* filt_dates: **`r filt_dates`**
 * buffer_distance: **`r buffer_distance` km**
 
 
 ```{r functions}
-extract_stats_to_csv <- function(rich_tif_fp, div_dir, combo_ras, overwrite = FALSE){
+extract_stats_to_csv <- function(rich_tif_fp, div_dir, combo_ras, 
+                                 rich_dir = NA, col_types = 'ifffdf', overwrite = FALSE){
   
   # Resulting path for CSV
   rich_fn <- basename(tools::file_path_sans_ext(rich_tif_fp))
-  rich_dir <- dirname(rich_tif_fp)
+  if(is.na(rich_dir))  rich_dir <- dirname(rich_tif_fp)
   div_df_fp <- file.path(rich_dir, 'csvs', str_c(rich_fn, '.csv'))
   dir.create(dirname(div_df_fp), recursive = TRUE, showWarnings = FALSE)
 
-  if(file.exists(div_df_fp) & !overwrite) return(read_csv(div_df_fp, col_types='ifffdf'))
+  if(file.exists(div_df_fp) & !overwrite) return(read_csv(div_df_fp, col_types=col_types))
   
   # Load raster and add to SpatRaster
   rich_ras <- terra::rast(rich_tif_fp)
@@ -140,6 +142,66 @@ create_richness_df <- function(rich_dir, div_dir, zones_lu_fp, combo_ras, overwr
         factor(),
       landcover = recode(landcover, !!!lu$landcover) %>%
         factor(levels = c('veg', 'ag', 'otro'))
+    )
+  
+  # Save
+  div_df %>% saveRDS(df_fp)
+  
+  # Return
+  return(div_df)
+}
+
+
+create_richness_df_with_ids <- function(rich_dir, div_dir, zones_lu_fp, combo_ras, overwrite = FALSE) {
+  
+  df_fp <- file.path(rich_dir, 'richness_df_with_ids.rds')
+  if(file.exists(df_fp) & !overwrite) return(readRDS(df_fp))
+  
+  # List richness tifs
+  (fps <- list.files(rich_dir, '*\\.tif', full.names = TRUE))
+  
+  # Create/load DFs
+  div_df <- fps %>% purrr::map_dfr(extract_stats_to_csv, div_dir, combo_ras,
+                                   rich_dir = div_dir, col_type = 'iffffdf', overwrite= FALSE)
+  
+  # Recode biome names
+  lu <- readRDS(zones_lu_fp)
+  biom_codes_all <- tibble(
+    id = names(lu$biom),
+    name = lu$biom,
+    code = c(
+      'CalMedit',
+      'Desierto',
+      'ElevSemiar',
+      'GranPlanic',
+      'SelvCalHum',
+      'SelvCalSec',
+      'SierTemp'
+    ),
+    english = c(
+      'Mediterranean California',
+      'Deserts',
+      'Semi-arid Highlands',
+      'Great Plains',
+      'Tropical Wet Forests',
+      'Tropical Dry Forests',
+      'Temperate Sierras'
+    )
+  )
+  biom_codes <- setNames(biom_codes_all$english, biom_codes_all$id)
+  
+  # Convert numeric code to factors
+  div_df <- div_df %>%
+    mutate(
+      anp_zone = recode(anp_zone, !!!lu$anp) %>%
+        factor(levels = c(
+          'Outside buffer', 'Buffer 10 km', 'Inside NPA'
+        )),
+      biome = recode(biome, !!!biom_codes) %>%
+        factor(),
+      landcover = recode(landcover, !!!lu$landcover) %>%
+        factor(levels = c('veg', 'ag', 'otro')),
+      ID_ANP = recode(ID_ANP, !!!lu$ID_ANP)
     )
   
   # Save
@@ -370,6 +432,7 @@ plot_pollin_facet <- function(df, title = NA, var2='landcover', grp_var='anp_zon
         biome = ~ str_replace(.x, ' ', '\n'),
         pol_group = ~ str_to_title(.x)
       )) +
+    expand_limits(x=0) +
     ggtitle(title) +
     theme_minimal() +
     theme(
@@ -411,10 +474,7 @@ bees_theme <- function() {
     strip.text = element_text(size = rel(0.75), 
                               margin = margin(3,3,3,3)),
     strip.text.x = element_text(vjust = 0),
-    # axis.text.x = element_text(
-    #   margin = margin(t = .2, unit = "mm"),
-    #   hjust = c(0, 0.5, 1)
-    # ),
+    # axis.text.x = element_text( hjust = c(0, 0.5, 1)),
     axis.title.x = element_text(margin = margin(t=3))
   )
 }
@@ -429,10 +489,6 @@ ggsave_19cm <- function(fig_fp, p, height = 10, width = 19, units = 'cm', dpi = 
 
 Convert rasters to dataframes of richness by ANP zone, biome, land cover, and pollinator group. 
 
-#### Sample DF
-
-Create stratified random sample of pollinator richness values. `r samp_n` pixels are sampled from each unique combination of ecoregion, land cover type, and ANP zone. The same pixels are sampled for each pollinator group, i.e. each pollinator richness layer.
-
 ```{r make div_df}
 # Load stacked zones
 combo_ras <- terra::rast(zones_ras_fp)
@@ -444,15 +500,76 @@ div_df <- div_df %>%
          pol_group = factor(pol_group, 
                             levels = c('bee', 'butterfly', 'moth', 
                                        'bat', 'hummingbird', 'fly', 'wasp')))
+```
 
-# Stratified random sample
+#### Richness by pollinator group
+
+```{r richness}
+div_df %>%
+  group_by(pol_group) %>% 
+  summarise(mean = mean(richness, na.rm = TRUE),
+            median = median(richness),
+            min = min(richness, na.rm = TRUE), 
+            max = max(richness, na.rm = TRUE)) %>% 
+  arrange(desc(mean))
+```
+
+#### Richness in each ecoregion
+
+```{r richness stats}
+div_df %>%
+  group_by(biome, pol_group) %>% 
+  summarise(mean = mean(richness, na.rm = TRUE),
+            median = median(richness),
+            min = min(richness, na.rm = TRUE), 
+            max = max(richness, na.rm = TRUE)) %>% 
+  arrange(desc(mean))
+```
+
+#### Richness in relation to NPA
+
+```{r richness npa}
+anp_ras_fp <- str_c(tools::file_path_sans_ext(anp_terr_fp), '.tif')
+combo_ras <- c(combo_ras, ID_ANP = terra::rast(anp_ras_fp))
+  
+div_dir <- "data/data_out/sdm/rf4_excl_unqc_alldates_LcAltWc/diversity_by_zones/anp_ids"
+anp_id_df <- create_richness_df_with_ids(rich_dir, div_dir, zones_lu_fp, combo_ras, overwrite = FALSE)
+anp_id_df <- anp_id_df %>% 
+  mutate(pol_group = factor(pol_group, 
+                            levels = c('bee', 'butterfly', 'moth', 
+                                       'bat', 'hummingbird', 'fly', 'wasp')))
+
+anp_id_df %>%
+  filter(pol_group == 'bee') %>% 
+  group_by(pol_group, ID_ANP) %>% 
+  summarise(mean = mean(richness, na.rm = TRUE),
+            median = median(richness),
+            min = min(richness, na.rm = TRUE), 
+            max = max(richness, na.rm = TRUE)) %>% 
+  arrange(desc(mean))
+```
+
+#### Sample DF
+
+Create stratified random sample of pollinator richness values. `r samp_n` pixels are sampled from each unique combination of ecoregion, land cover type, and ANP zone. The same pixels are sampled for each pollinator group, i.e. each pollinator richness layer.
+
+```{r sample div_df}
 (n_pols <- length(levels(div_df$pol_group)))
 fn_prefix <- str_c('rf', rf_vers, '_', n_pols, 'pols')
-samp_dir <- file.path(div_dir, str_c('samp', samp_n))
-samp_fp <- file.path(samp_dir, str_c(fn_prefix, '.rds'))
-df_samp <- sample_df(div_df, samp_n, samp_fp, 
-                     grp_vars = c('anp_zone', 'biome', 'landcover'),
-                     overwrite = FALSE)
+
+if(!is.na(samp_n)) {
+  # Stratified random sample
+  samp_dir <- file.path(div_dir, str_c('samp', samp_n))
+  dir.create(samp_dir, recursive = TRUE, showWarnings = )
+  samp_fp <- file.path(samp_dir, str_c(fn_prefix, '.rds'))
+  df_samp <- sample_df(div_df, samp_n, samp_fp, 
+                       grp_vars = c('anp_zone', 'biome', 'landcover'),
+                       overwrite = FALSE)
+} else {
+  samp_dir <- file.path(div_dir, 'no_samp')
+  samp_fp <- file.path(samp_dir, str_c(fn_prefix, '.rds'))
+  df_samp <- div_df
+}
 ```
 
 ### Compare richness by zones
@@ -470,8 +587,8 @@ by_biome <- FALSE
 var2_code <- ifelse(is.na(var2), '', str_c(str_remove_all(var2, '_.*'), '_'))
 grp_var_code <- str_remove_all(grp_var, '_.*')
 by_biom_code <- ifelse(by_biome, '', 'noBiome_')
-fn <- str_c('grpdiffs_', fn_prefix, '_', by_biom_code, var2_code, grp_var_code, '.rds')
-grp_diffs_fp <- file.path(samp_dir, fn)
+grp_diffs_fp <- file.path(samp_dir, 
+                          str_c('grpdiffs_', fn_prefix, '_', by_biom_code, var2_code, grp_var_code, '.rds'))
 medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, 
                                      by_biome = by_biome,
                                      overwrite = FALSE)
@@ -516,9 +633,9 @@ var2 <- NA
 var2_code <- ifelse(is.na(var2), '', 
                     str_c(str_remove_all(var2, '_.*'), '_'))
 grp_var_code <- str_remove_all(grp_var, '_.*')
-fn <- str_c('grpdiffs_', fn_prefix, '_', 
-            var2_code, grp_var_code, '.rds')
-grp_diffs_fp <- file.path(samp_dir, fn)
+grp_diffs_fp <- file.path(samp_dir, 
+                          str_c('grpdiffs_', fn_prefix, '_', 
+            var2_code, grp_var_code, '.rds'))
 medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=TRUE)
 
 # Plot
@@ -596,29 +713,8 @@ ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png'),
 combo_ras <- terra::rast(zones_ras_fp)
 
 rich_dir <- file.path(pred_dir, 'richness', 'bee_subgroups')
-bees_df <- create_richness_df(rich_dir, div_dir, zones_lu_fp, combo_ras, overwrite = TRUE)
-
-# Stratified random sample
-(n_pols <- length(levels(bees_df$pol_group)))
-fn_prefix <- str_c('rf', rf_vers, '_', n_pols, 'beegroups')
-samp_fp <- file.path(samp_dir, str_c(fn_prefix, '.rds'))
-df_samp <- sample_df(bees_df, samp_n, samp_fp, 
-                     grp_vars = c('anp_zone', 'biome', 'landcover'),
-                     overwrite = TRUE)
-```
-
-
-```{r bees compare-anp, fig.width=7, fig.height=4, cache=T}
-grp_var <- 'anp_zone'
-grp_var_code <- 'ANPzone'
-var2 <- NA
-var2_code <- 'noLC'
-
-# File name
-fn <- str_c('grpdiffs_', fn_prefix, '_', var2_code, '_', grp_var_code, '.rds')
-grp_diffs_fp <- file.path(samp_dir, fn)
-medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=TRUE)
-medians_anp <- medians_anp %>%
+bees_df <- create_richness_df(rich_dir, div_dir, zones_lu_fp, combo_ras, overwrite = FALSE)
+bees_df <- bees_df %>%
   mutate(
     pol_group = factor(
       pol_group,
@@ -640,6 +736,119 @@ medians_anp <- medians_anp %>%
     biome = factor(biome, levels = bioms_english_sorted)
   ) 
 
+# Stratified random sample
+(n_pols <- length(levels(bees_df$pol_group)))
+fn_prefix <- str_c('rf', rf_vers, '_', n_pols, 'beegroups')
+samp_fp <- file.path(samp_dir, str_c(fn_prefix, '.rds'))
+df_samp <- sample_df(bees_df, samp_n, samp_fp, 
+                     grp_vars = c('anp_zone', 'biome', 'landcover'),
+                     overwrite = FALSE)
+```
+
+
+```{r bees compare ANP, fig.width=7, fig.height=4, cache=T}
+grp_var <- 'anp_zone'
+var2 <- NA
+by_biome <- FALSE
+
+# File name
+var2_code <- ifelse(is.na(var2), '', str_c(str_remove_all(var2, '_.*'), '_'))
+grp_var_code <- str_remove_all(grp_var, '_.*')
+by_biom_code <- ifelse(by_biome, '', 'noBiome_')
+grp_diffs_fp <- file.path(samp_dir, 
+                          str_c('grpdiffs_', fn_prefix, '_', by_biom_code, var2_code, grp_var_code, '.rds'))
+
+# Get group medians and significance
+medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, 
+                                     by_biome = by_biome,
+                                     overwrite = TRUE)
+medians_anp <- medians_anp %>%
+  mutate(
+    grouper = ifelse(
+      pol_group %in% c('social', 'solitary-social', 'solitary'),
+      'by sociality',
+      'by nesting'
+    )
+  ) 
+
+# Plot
+(p_nest <- medians_anp %>%
+    filter(grouper == 'by nesting') %>% 
+    plot_pollin_facet(
+      title = 'Bees by nesting behavior', 
+      var2 = 'pol_group',
+      grp_var = grp_var,
+      rows_var = 'pol_group',
+      facet_scales = 'free_x'
+    ) +
+    facet_grid(
+      rows = vars(pol_group),
+      labeller = labeller(
+        biome = ~ str_replace(.x, ' ', '\n'),
+        pol_group = ~ str_to_title(.x)
+      )
+    ) +
+    scale_x_continuous(n.breaks= 3) +
+    expand_limits(x=0) +
+    bees_theme()
+)
+
+# Save figure
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_nesting.png'),
+                p_nest,
+                width = 8,
+            height = 7,
+            overwrite = TRUE)
+
+ # Plot by sociality
+(p_soc <- medians_anp %>%
+    filter(grouper == 'by sociality') %>% 
+    plot_pollin_facet(
+      title = 'Bees by sociality', 
+      var2 = 'pol_group',
+      grp_var = grp_var,
+      rows_var = 'pol_group',
+      facet_scales = 'free_x'
+    ) +
+    facet_grid(
+      rows = vars(pol_group),
+      labeller = labeller(
+        biome = ~ str_replace(.x, ' ', '\n'),
+        pol_group = ~ str_to_title(.x)
+      )
+    ) +
+    scale_x_continuous(n.breaks= 3) +
+    expand_limits(x=0) +
+    bees_theme()
+)
+
+# Save figure
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_sociality.png'),
+                p_soc,
+                width = 8,
+            height = 6,
+            overwrite = TRUE)
+```
+
+```{r bees compare-anp, fig.width=7, fig.height=4, cache=T}
+grp_var <- 'anp_zone'
+grp_var_code <- 'ANPzone'
+var2 <- NA
+var2_code <- 'noLC'
+
+# File name
+fn <- str_c('grpdiffs_', fn_prefix, '_', var2_code, '_', grp_var_code, '.rds')
+grp_diffs_fp <- file.path(samp_dir, fn)
+medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=TRUE)
+medians_anp <- medians_anp %>%
+  mutate(
+    grouper = ifelse(
+      pol_group %in% c('social', 'solitary-social', 'solitary'),
+      'by sociality',
+      'by nesting'
+    )
+  ) 
+
 # Plot
 (p_beegroups <- medians_anp %>% 
   plot_pollin_facet('Bee sub-groups by nesting behavior and sociality', 
@@ -656,10 +865,8 @@ medians_anp <- medians_anp %>%
     )
 
 # Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_polxbiome.png')
-if(!file.exists(fig_fp)){ 
-  ggsave(fig_fp, width=19, height=10, units = 'cm', dpi = 600)
-  }
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_polxbiome.png'),
+            p_beegroups, height = 10, overwrite = TRUE)
 
 # Bees by nesting behavior
 (p_bynesting <- medians_anp %>% 
@@ -671,10 +878,8 @@ if(!file.exists(fig_fp)){
   bees_theme())
 
 # Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_beesnesting.png')
-if(!file.exists(fig_fp)) {
-  ggsave(fig_fp, p_bynesting, width=19, height=7, units = 'cm', dpi = 600)
-  }
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_beesnesting.png'),
+            p_bynesting, height = 7, overwrite = TRUE)
 
 # Plot only bees
 (p_bysocial <- medians_anp %>% 
@@ -686,28 +891,15 @@ if(!file.exists(fig_fp)) {
   bees_theme())
 
 # Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_beessocial.png')
-if(!file.exists(fig_fp)) {
-  ggsave(fig_fp, p_bysocial, width=19, height=6, units = 'cm', dpi = 600)
-}
-
-# Put the plots together
-plots <- list(p_bysocial, 
-              p_bynesting)
-
-wrap_plots(plots, ncol=1, guides = 'collect') & 
-  scale_x_continuous(n.breaks= 3)
-
-# Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, width=19, height=10, units = 'cm', dpi = 600)
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_beessocial.png'),
+            p_bysocial, height = 6, overwrite = TRUE)
 ```
 
 ### Compare all pollinators using land cover
 
 #### Compare by landcover and NPA zone
 
-```{r compare-landcover-x-anp}
+```{r compare-landcover-x-anp, eval = FALSE}
 grp_var <- 'landcover'
 var2 <- 'anp_zone'
 var2_code <- 'ANPzone'
@@ -719,7 +911,7 @@ sum2 <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=TR
 sum2 <- sum2 %>% mutate(biome = factor(biome, levels = bioms_english_sorted))
 ```
 
-```{r plot-landcover-x-anp, fig.width=7, fig.height=8, cache=T}
+```{r plot-landcover-x-anp, fig.width=7, fig.height=8, cache=T, eval = FALSE}
 # Plot just one
 pol_grp <- 'bee'
 (
@@ -742,9 +934,6 @@ pol_grp <- 'bee'
 ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png'),
             p_bees, height = 6, overwrite = TRUE)
 
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, p_bees, height=3, )
-
 # Plot
 pol_grp <- 'hummingbird'
 p_birds <- sum2 %>% 
@@ -781,7 +970,7 @@ plots <- list(p_bees + theme(strip.text.x = element_text(size=rel(0.8))),
               guide_area(), 
               p_flies + theme(axis.title.x = element_text()))
 
-wrap_plots(plots, ncol=2, guides = 'collect') +
+p_lc <- wrap_plots(plots, ncol=2, guides = 'collect') +
   plot_annotation(caption = caption) & 
   # scale_x_continuous(n.breaks=3,
   #                    limits = c(0, 10)) &
@@ -792,13 +981,13 @@ wrap_plots(plots, ncol=2, guides = 'collect') +
                                    hjust = c(0, 0.5, 1) ))
 
 # Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, height=8, width = 8)
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '.png'),
+            p_lc, height = 13, overwrite = TRUE)
 ```
 
 #### Compare by NPA zone and landcover
 
-```{r compare-anp-x-landcover}
+```{r compare-anp-x-landcover, eval = FALSE}
 grp_var <- 'anp_zone'
 grp_var_code <- 'ANPzone'
 var2 <- 'landcover'
@@ -809,7 +998,7 @@ grp_diffs_fp <- file.path(samp_dir, fn)
 sum2 <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=FALSE)
 ```
 
-```{r plot-anp-x-landcover, fig.height=8, fig.width=7, cache=TRUE}
+```{r plot-anp-x-landcover, fig.height=8, fig.width=7, cache=TRUE, eval = FALSE}
 # Plot just one
 pol_grp <- 'bee'
 p_bees <- sum2 %>% 
@@ -817,8 +1006,8 @@ p_bees <- sum2 %>%
   plot_pollin_facet(str_to_title(pol_grp), var2=var2, grp_var=grp_var) 
 
 # Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, p_bees, height=3)
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png'),
+            p_bees, height = 6, overwrite = TRUE)
 
 # Plot
 pol_grp <- 'hummingbird'
@@ -856,7 +1045,7 @@ plots <- list(p_bees + theme(strip.text.x = element_text(size=rel(0.8))),
               guide_area(), 
               p_flies + theme(axis.title.x = element_text()))
 
-wrap_plots(plots, ncol=2, guides = 'collect') +
+p_anplc <- wrap_plots(plots, ncol=2, guides = 'collect') +
   plot_annotation(caption = caption) & 
   # scale_x_continuous(n.breaks=3,
   #                    limits = c(0, 10)) &
@@ -867,6 +1056,6 @@ wrap_plots(plots, ncol=2, guides = 'collect') +
                                    hjust = c(0, 0.5, 1) ))
 
 # Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, height=8, width = 10)
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '.png'),
+            p_anplc, height = 10, overwrite = TRUE)
 ```

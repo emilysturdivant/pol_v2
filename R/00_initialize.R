@@ -728,12 +728,16 @@ plot_qc_maps <- function(sp_row, fig_dir) {
 }
 
 # Analysis zones ----
-rasterize_zones <- function(zones_fp, rich_ras, 
-                            field = 'zone', overwrite = FALSE) {
+rasterize_zones <- function(zones_fp, rich_ras, field = 'zone', 
+                            ras_fp = NA, overwrite = FALSE) {
   
-  ras_fp <- str_c(tools::file_path_sans_ext(zones_fp), '.tif')
-  
-  if(file.exists(ras_fp) & !overwrite) return(terra::rast(ras_fp))
+  if(is.na(ras_fp) & is.character(zones_fp)) {
+    ras_fp <- str_c(tools::file_path_sans_ext(zones_fp), '.tif')
+  }
+
+  if(file.exists(ras_fp) & !overwrite) {
+    return( list(r = terra::rast(ras_fp), lu = NA))
+    }
   
   # ANP polys
   polys <- terra::vect(zones_fp)
