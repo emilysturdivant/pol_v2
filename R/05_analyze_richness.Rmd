@@ -34,8 +34,20 @@ The result of the notebook is a collection of graphics displaying richness for e
 # Load libraries and initialize variables
 source('R/00_initialize.R')
 
-samp_n <- 350
+samp_n <- 600
 # sessionInfo()
+
+caption <- "Different colors within one facet indicate statistically significant (p < 0.05) difference between groups."
+
+bioms_english_sorted <- c(
+      'Mediterranean California',
+      'Deserts',
+      'Great Plains',
+      'Semi-arid Highlands',
+      'Temperate Sierras',
+      'Tropical Dry Forests',
+      'Tropical Wet Forests'
+    )
 
 # # Zones raster and lookup table
 # zone_polys_dir <- file.path('data', 'tidy', 'analysis_zones', 'from_v1')
@@ -104,9 +116,18 @@ create_richness_df <- function(rich_dir, div_dir, zones_lu_fp, combo_ras, overwr
       'SelvCalHum',
       'SelvCalSec',
       'SierTemp'
+    ),
+    english = c(
+      'Mediterranean California',
+      'Deserts',
+      'Semi-arid Highlands',
+      'Great Plains',
+      'Tropical Wet Forests',
+      'Tropical Dry Forests',
+      'Temperate Sierras'
     )
   )
-  biom_codes <- setNames(biom_codes_all$code, biom_codes_all$id)
+  biom_codes <- setNames(biom_codes_all$english, biom_codes_all$id)
   
   # Convert numeric code to factors
   div_df <- div_df %>%
@@ -161,15 +182,37 @@ get_grp_diffs <- function(df, grp_var){
   
   # Get medians and confidence intervals
   dat <- data.frame(group = df[[grp_var]], richness = df[['richness']])
-  Sum <- rcompanion::groupwiseMedian(data = dat,
-               var = "richness",
-               group = "group",
-               conf       = 0.95,
-                R          = 5000,
-                percentile = TRUE,
-                bca        = FALSE,
-                digits     = 3)
+  (medians <- tryCatch(
+    rcompanion::groupwiseMedian(
+      data = dat,
+      var = "richness",
+      group = "group",
+      conf       = 0.95,
+      R          = 1000,
+      percentile = TRUE,
+      bca        = FALSE,
+      digits     = 3
+    ),
+    error = function(e) {
+      rcompanion::groupwiseMedian(
+        data = dat,
+        var = "richness",
+        group = "group",
+        conf       = 0.95,
+        R          = 1000,
+        percentile = FALSE,
+        bca        = FALSE,
+        digits     = 3
+      ) %>% 
+        mutate(
+        Conf.level = NA,
+        Percentile.lower = NA,
+        Percentile.upper = NA
+      )
+    }
+  ))
   
+  # Test for differences between groups
   if(length(unique(df[[grp_var]])) == 1) {
     
     print('Only one group.')
@@ -198,59 +241,79 @@ get_grp_diffs <- function(df, grp_var){
 
   # Join letter indicating significantly different groups to medians and CIs
   sum1 <- select(tibble(cld), zone, sig_group) %>% 
-    left_join(tibble(Sum), 
+    left_join(tibble(medians), 
               by=c(zone='group'))
   
   return(sum1)
 }
 
-iterate_get_grp_diffs <- function(df_samp, grp_var, var2, grp_diffs_fp, overwrite=FALSE) {
+iterate_get_grp_diffs <-
+  function(df_samp,
+           grp_var,
+           var2,
+           grp_diffs_fp,
+           by_biome = TRUE,
+           overwrite = FALSE) {
     # Get group differences for each combination of biome and ANP zone
     
-    if(file.exists(grp_diffs_fp) & !overwrite) return(readRDS(grp_diffs_fp))
-  
+    if (file.exists(grp_diffs_fp) &
+        !overwrite)
+      return(readRDS(grp_diffs_fp))
+    
     # Nest df by groups
-    # df_nest <- df_samp %>% 
-    #   group_by(pol_group, biome, .data[[var2]]) %>% 
-    #   nest()
-      
-    if(is.na(var2)){
-      df_nest <- df_samp %>% 
-        group_by(pol_group, biome) %>% 
-        nest()
-      
-      } else {
+    if (by_biome) {
+      if (is.na(var2)) {
         df_nest <- df_samp %>%
-          group_by(pol_group, biome, .data[[var2]]) %>% 
+          group_by(pol_group, biome) %>%
+          nest()
+        
+      } else if (by_biome) {
+        df_nest <- df_samp %>%
+          group_by(pol_group, biome, .data[[var2]]) %>%
           nest()
       }
+    } else {
+      if (is.na(var2)) {
+        df_nest <- df_samp %>%
+          group_by(pol_group) %>%
+          nest()
+        
+      } else if (by_biome) {
+        df_nest <- df_samp %>%
+          group_by(pol_group, .data[[var2]]) %>%
+          nest()
+      }
+    }
     
     # Run get_grp_diffs for each group
     medians <- df_nest %>%
-      # filter(biome == 'Desierto', pol_group == 'hummingbird') %>%
+      # filter(biome == 'Deserts', pol_group == 'hummingbird') %>%
       mutate(sum = purrr::map(data, get_grp_diffs, grp_var)) %>%
-      select(-data) %>% 
-      unnest(cols=sum)
+      select(-data) %>%
+      unnest(cols = sum)
     
     # significant group factor levels
     sg_levels <- sort(as.character(unique(medians$sig_group)))
-    medians <- medians %>% 
+    medians <- medians %>%
       mutate(sig_group = factor(sig_group, levels = sg_levels))
     
-    # Save 
+    # Save
     medians %>% saveRDS(grp_diffs_fp)
     return(medians)
-}
+  }
 
-plot_pollin_facet <- function(df, pol_grp, var2='landcover', grp_var='anp_zone',
-                              rows_var = NULL, cols_var = 'biome', facet_scales = 'fixed'){
+plot_pollin_facet <- function(df, title = NA, var2='landcover', grp_var='anp_zone',
+                              rows_var = NULL, cols_var = NULL, facet_scales = 'fixed'){
   
   # Get upper limit for X
-  xmax <- max(df$Percentile.upper)
+  xmax <- max(df$Percentile.upper, na.rm = TRUE)
   if(is.null(rows_var)) rows_var = var2
   
   # Set up to shade facets by var2
-  df_rect <- distinct(df, biome, .data[[var2]], pol_group)
+  selvars <- c('pol_group', 'biome')
+  if(!is.na(var2)) selvars <- c(selvars, var2)
+  df_rect <- df %>% select(any_of(selvars)) %>% distinct()
+  
   if(grp_var == 'anp_zone'){
     
     var_levels <- c( 'Outside buffer', 'Buffer 10 km', 'Inside NPA')
@@ -286,7 +349,7 @@ plot_pollin_facet <- function(df, pol_grp, var2='landcover', grp_var='anp_zone',
      geom_point(aes(y = zone, x = Median, color=sig_group), 
                 shape = 15, size  = 2) +
      xlab("Median richness with 95% CI") +
-    scale_x_continuous(n.breaks= 3) +
+    scale_x_continuous(n.breaks = NULL) +
     scale_y_discrete(limits = var_levels) +
     
     # Color points by significance group
@@ -302,30 +365,63 @@ plot_pollin_facet <- function(df, pol_grp, var2='landcover', grp_var='anp_zone',
     # Facet by x=pollinator group, y = ANP zone
     # facet_grid(vars(.data[[var2]]), vars(biome)) +
     facet_grid(vars(.data[[rows_var]]), vars(.data[[cols_var]]), 
-               scales = facet_scales) +
-    ggtitle(pol_grp) +
+               scales = facet_scales, 
+               labeller = labeller(
+        biome = ~ str_replace(.x, ' ', '\n'),
+        pol_group = ~ str_to_title(.x)
+      )) +
+    ggtitle(title) +
     theme_minimal() +
     theme(
-      plot.title = element_text(size=rel(1), face='bold', hjust=0),
-      panel.spacing = unit(0.5, 'mm'),
-      panel.border=element_blank(),
-      # panel.grid = element_line(color='darkgray'), 
-      # panel.grid.minor.x = element_line(color='darkgray'),
-      panel.grid.major.y=element_blank(),
-      panel.ontop = FALSE,
-      panel.background = element_blank(),
       axis.title.x = element_blank(),
       axis.title.y = element_blank(), 
       axis.ticks.y = element_blank(),
+      axis.ticks.x = element_line('lightgray'),
+        axis.text.y = element_text(size = rel(0.75)),
       # axis.text.x = element_text(margin = margin(t = .2, unit = "mm")),
-      strip.text = element_blank(),
+      # strip.text = element_blank(),
+        strip.text = element_text(size=rel(0.75),
+                                  margin = margin(l = 3, b=1)),
+        strip.text.y = element_text(angle = 0, hjust=0), 
       strip.background = element_blank(),
       strip.switch.pad.grid = unit(0.5, 'mm'),
-      legend.position = 'none'
+      legend.position = 'none',
+      plot.title = element_text(size=rel(1), face='bold', hjust=0),
+      panel.spacing = unit(0.5, 'mm'),
+      panel.border=element_blank(),
+      panel.grid.major.y=element_blank(),
+      panel.ontop = FALSE,
+      panel.background = element_blank(),
+        plot.background = element_rect(fill = 'white'),
+        plot.caption.position = 'plot',
+        plot.title.position = 'plot'
       )
   
   return(p)
   
+}
+
+bees_theme <- function() {
+  theme(
+    panel.grid = element_line(color = 'lightgray'),
+    panel.grid.minor.x = element_line(color = 'lightgray'),
+    panel.background = element_rect(fill = alpha('#A6A6A6', 0.3),
+                                    color = 'white'),
+    plot.background = element_rect(fill = 'white', color = NA),
+    strip.text = element_text(size = rel(0.75), 
+                              margin = margin(3,3,3,3)),
+    strip.text.x = element_text(vjust = 0),
+    # axis.text.x = element_text(
+    #   margin = margin(t = .2, unit = "mm"),
+    #   hjust = c(0, 0.5, 1)
+    # ),
+    axis.title.x = element_text(margin = margin(t=3))
+  )
+}
+
+ggsave_19cm <- function(fig_fp, p, height = 10, width = 19, units = 'cm', dpi = 600, overwrite = TRUE, ...) {
+  if(file.exists(fig_fp) & !overwrite) return()
+  ggsave(fig_fp, p, height = height, width = width, units = units, dpi = dpi, ...)
 }
 ```
 
@@ -342,23 +438,274 @@ Create stratified random sample of pollinator richness values. `r samp_n` pixels
 combo_ras <- terra::rast(zones_ras_fp)
 
 rich_dir <- file.path(pred_dir, 'richness')
-div_df <- create_richness_df(rich_dir, div_dir, zones_lu_fp, combo_ras, overwrite = TRUE)
+div_df <- create_richness_df(rich_dir, div_dir, zones_lu_fp, combo_ras, overwrite = FALSE)
+div_df <- div_df %>% 
+  mutate(biome = factor(biome, levels = bioms_english_sorted),
+         pol_group = factor(pol_group, 
+                            levels = c('bee', 'butterfly', 'moth', 
+                                       'bat', 'hummingbird', 'fly', 'wasp')))
 
 # Stratified random sample
 (n_pols <- length(levels(div_df$pol_group)))
-fn_prefix <- str_c('samp', samp_n, '_rf', rf_vers, '_', n_pols, 'pols')
-samp_fp <- file.path(div_dir, str_c(fn_prefix, '.rds'))
+fn_prefix <- str_c('rf', rf_vers, '_', n_pols, 'pols')
+samp_dir <- file.path(div_dir, str_c('samp', samp_n))
+samp_fp <- file.path(samp_dir, str_c(fn_prefix, '.rds'))
 df_samp <- sample_df(div_df, samp_n, samp_fp, 
                      grp_vars = c('anp_zone', 'biome', 'landcover'),
                      overwrite = FALSE)
 ```
 
-### Compare richness by zones - ANP zones
+### Compare richness by zones
 
 The function `get_grp_diffs` evaluates the statistical significance of groups and returns medians, CIs, and significant groups for plotting. It will be applied to each group of pollinator, biome, and either ANP zone or land cover type.
 
-### Compare groups
-#### Compare by land cover type
+#### Compare ANP zones
+
+```{r compare ANP, fig.width=7, fig.height=4, cache=T}
+grp_var <- 'anp_zone'
+var2 <- NA
+by_biome <- FALSE
+
+# File name
+var2_code <- ifelse(is.na(var2), '', str_c(str_remove_all(var2, '_.*'), '_'))
+grp_var_code <- str_remove_all(grp_var, '_.*')
+by_biom_code <- ifelse(by_biome, '', 'noBiome_')
+fn <- str_c('grpdiffs_', fn_prefix, '_', by_biom_code, var2_code, grp_var_code, '.rds')
+grp_diffs_fp <- file.path(samp_dir, fn)
+medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, 
+                                     by_biome = by_biome,
+                                     overwrite = FALSE)
+
+# Plot
+(
+  p_anp <- medians_anp %>%
+    plot_pollin_facet(
+      var2 = 'pol_group',
+      grp_var = grp_var,
+      cols_var = 'pol_group',
+      facet_scales = 'free_x'
+    ) +
+    facet_grid(
+      cols = vars(pol_group),
+      scales = 'free_x',
+      labeller = labeller(
+        biome = ~ str_replace(.x, ' ', '\n'),
+        pol_group = ~ str_to_title(.x)
+      )
+    ) +
+    scale_x_continuous(n.breaks= 3) +
+    expand_limits(x=0) +
+    bees_theme() +
+    theme(plot.title = element_blank())
+)
+
+# Save figure
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '.png'),
+                p_anp,
+                height = 4,
+            overwrite = TRUE)
+```
+
+#### Compare ANP zones within each biome
+
+```{r compare ANP by biome, fig.width=7, fig.height=4, cache=T}
+grp_var <- 'anp_zone'
+var2 <- NA
+
+# File name
+var2_code <- ifelse(is.na(var2), '', 
+                    str_c(str_remove_all(var2, '_.*'), '_'))
+grp_var_code <- str_remove_all(grp_var, '_.*')
+fn <- str_c('grpdiffs_', fn_prefix, '_', 
+            var2_code, grp_var_code, '.rds')
+grp_diffs_fp <- file.path(samp_dir, fn)
+medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=TRUE)
+
+# Plot
+(
+  p_anp <- medians_anp %>%
+    plot_pollin_facet(
+      'All',
+      var2 = 'pol_group',
+      grp_var = grp_var,
+      rows_var = 'biome',
+      cols_var = 'pol_group',
+      facet_scales = 'free_x'
+    ) +
+    facet_grid(
+      vars(biome),
+      vars(pol_group),
+      scales = 'free_x',
+      labeller = labeller(
+        biome = ~ str_replace(.x, ' ', '\n'),
+        pol_group = ~ str_to_title(.x)
+      )
+    ) +
+    scale_x_continuous(n.breaks= 3) +
+    expand_limits(x=0) +
+    labs(caption = caption) +
+    bees_theme() +
+    theme(plot.title = element_blank())
+)
+
+# Save figure
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_polxbiome.png'),
+                p_anp,
+                height = 10,
+            overwrite = TRUE)
+```
+
+#### Just look at bees
+
+```{r bees compare ANP by biome, fig.width=7, fig.height=4, cache=T}
+# Plot only bees
+(
+  p_bees <- medians_anp %>%
+  filter(pol_group == 'bee') %>% 
+    plot_pollin_facet(
+      'Bees',
+      var2 = 'pol_group',
+      grp_var = grp_var
+    ) +    
+    facet_grid(
+      vars(biome),
+      vars(pol_group),
+      labeller = labeller(
+        biome = ~ str_replace(.x, ' ', '\n'),
+        pol_group = ~ str_to_title(.x)
+      )
+    ) +
+    scale_x_continuous(n.breaks= 3) +
+    expand_limits(x=0) +
+    bees_theme() +
+    theme(strip.text.x = element_blank())
+)
+
+# Save figure
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png'),
+                p_bees,
+                width = 8,
+            height = 13,
+            overwrite = TRUE)
+```
+
+### Compare bee subgroups
+
+```{r bees make div_df}
+# Load stacked zones
+combo_ras <- terra::rast(zones_ras_fp)
+
+rich_dir <- file.path(pred_dir, 'richness', 'bee_subgroups')
+bees_df <- create_richness_df(rich_dir, div_dir, zones_lu_fp, combo_ras, overwrite = TRUE)
+
+# Stratified random sample
+(n_pols <- length(levels(bees_df$pol_group)))
+fn_prefix <- str_c('rf', rf_vers, '_', n_pols, 'beegroups')
+samp_fp <- file.path(samp_dir, str_c(fn_prefix, '.rds'))
+df_samp <- sample_df(bees_df, samp_n, samp_fp, 
+                     grp_vars = c('anp_zone', 'biome', 'landcover'),
+                     overwrite = TRUE)
+```
+
+
+```{r bees compare-anp, fig.width=7, fig.height=4, cache=T}
+grp_var <- 'anp_zone'
+grp_var_code <- 'ANPzone'
+var2 <- NA
+var2_code <- 'noLC'
+
+# File name
+fn <- str_c('grpdiffs_', fn_prefix, '_', var2_code, '_', grp_var_code, '.rds')
+grp_diffs_fp <- file.path(samp_dir, fn)
+medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=TRUE)
+medians_anp <- medians_anp %>%
+  mutate(
+    pol_group = factor(
+      pol_group,
+      levels = c(
+        'social',
+        'solitary-social',
+        'solitary',
+        'above-ground',
+        'stems',
+        'cavities',
+        'ground'
+      )
+    ),
+    grouper = ifelse(
+      pol_group %in% c('social', 'solitary-social', 'solitary'),
+      'by sociality',
+      'by nesting'
+    ),
+    biome = factor(biome, levels = bioms_english_sorted)
+  ) 
+
+# Plot
+(p_beegroups <- medians_anp %>% 
+  plot_pollin_facet('Bee sub-groups by nesting behavior and sociality', 
+                    var2='pol_group', grp_var=grp_var,
+                    rows_var = 'biome', cols_var = 'pol_group', 
+                    facet_scales = 'free_x') +
+      facet_grid(vars(biome), vars(pol_group), 
+               scales = 'free_x', 
+               labeller = labeller(biome = ~ str_replace(.x, ' ', '\n'),
+                                   pol_group = ~ str_to_title(.x))) +
+    scale_x_continuous(n.breaks= 3) +
+    labs(caption = caption) +
+    bees_theme()
+    )
+
+# Save figure
+fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_polxbiome.png')
+if(!file.exists(fig_fp)){ 
+  ggsave(fig_fp, width=19, height=10, units = 'cm', dpi = 600)
+  }
+
+# Bees by nesting behavior
+(p_bynesting <- medians_anp %>% 
+  filter(pol_group %in% c('above-ground', 'cavities', 'ground', 'stems')) %>% 
+  plot_pollin_facet('Bees by nesting behavior', var2='pol_group', grp_var=grp_var) +
+      facet_grid(vars(pol_group), vars(biome),
+               # scales = 'free_x',
+               labeller = labeller(biome = ~ str_replace(.x, ' ', '\n'))) +
+  bees_theme())
+
+# Save figure
+fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_beesnesting.png')
+if(!file.exists(fig_fp)) {
+  ggsave(fig_fp, p_bynesting, width=19, height=7, units = 'cm', dpi = 600)
+  }
+
+# Plot only bees
+(p_bysocial <- medians_anp %>% 
+  filter(pol_group %in% c('social', 'solitary', 'solitary-social')) %>% 
+  plot_pollin_facet('Bees by sociality', var2='pol_group', grp_var=grp_var) +
+      facet_grid(vars(pol_group), vars(biome),
+               # scales = 'free_x',
+               labeller = labeller(biome = ~ str_replace(.x, ' ', '\n'))) +
+  bees_theme())
+
+# Save figure
+fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_beessocial.png')
+if(!file.exists(fig_fp)) {
+  ggsave(fig_fp, p_bysocial, width=19, height=6, units = 'cm', dpi = 600)
+}
+
+# Put the plots together
+plots <- list(p_bysocial, 
+              p_bynesting)
+
+wrap_plots(plots, ncol=1, guides = 'collect') & 
+  scale_x_continuous(n.breaks= 3)
+
+# Save figure
+fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png')
+if(!file.exists(fig_fp)) ggsave(fig_fp, width=19, height=10, units = 'cm', dpi = 600)
+```
+
+### Compare all pollinators using land cover
+
+#### Compare by landcover and NPA zone
 
 ```{r compare-landcover-x-anp}
 grp_var <- 'landcover'
@@ -367,22 +714,36 @@ var2_code <- 'ANPzone'
 
 # File name
 fn <- str_c('grpdiffs_', fn_prefix, '_', var2_code, '_', grp_var, '.rds')
-grp_diffs_fp <- file.path(div_dir, fn)
+grp_diffs_fp <- file.path(samp_dir, fn)
 sum2 <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=TRUE)
+sum2 <- sum2 %>% mutate(biome = factor(biome, levels = bioms_english_sorted))
 ```
 
 ```{r plot-landcover-x-anp, fig.width=7, fig.height=8, cache=T}
-caption <- "Different colors within one facet indicate statistically significant (p < 0.05) difference between groups."
-
 # Plot just one
 pol_grp <- 'bee'
-p_bees <- sum2 %>% 
-  filter(pol_group == pol_grp) %>% 
-  plot_pollin_facet(str_to_title(pol_grp), var2=var2, grp_var=grp_var) 
+(
+  p_bees <- sum2 %>%
+    filter(pol_group == pol_grp) %>%
+    plot_pollin_facet(str_to_title(pol_grp), var2 = var2, grp_var = grp_var)  +
+    facet_grid(
+      vars(anp_zone),
+      vars(biome),
+      labeller = labeller(
+        biome = ~ str_replace(.x, ' ', '\n'),
+        pol_group = ~ str_to_title(.x)
+      )
+    ) +
+    labs(caption = caption) +
+    bees_theme()
+)
 
 # Save figure
+ggsave_19cm(str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png'),
+            p_bees, height = 6, overwrite = TRUE)
+
 fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, p_bees, height=3)
+if(!file.exists(fig_fp)) ggsave(fig_fp, p_bees, height=3, )
 
 # Plot
 pol_grp <- 'hummingbird'
@@ -435,7 +796,7 @@ fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '.png')
 if(!file.exists(fig_fp)) ggsave(fig_fp, height=8, width = 8)
 ```
 
-#### Compare by ANP zone
+#### Compare by NPA zone and landcover
 
 ```{r compare-anp-x-landcover}
 grp_var <- 'anp_zone'
@@ -444,13 +805,11 @@ var2 <- 'landcover'
 
 # File name
 fn <- str_c('grpdiffs_', fn_prefix, '_', var2, '_', grp_var_code, '.rds')
-grp_diffs_fp <- file.path(div_dir, fn)
+grp_diffs_fp <- file.path(samp_dir, fn)
 sum2 <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=FALSE)
 ```
 
 ```{r plot-anp-x-landcover, fig.height=8, fig.width=7, cache=TRUE}
-caption <- "Different colors within one facet indicate statistically significant (p < 0.05) difference between groups."
-
 # Plot just one
 pol_grp <- 'bee'
 p_bees <- sum2 %>% 
@@ -510,188 +869,4 @@ wrap_plots(plots, ncol=2, guides = 'collect') +
 # Save figure
 fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '.png')
 if(!file.exists(fig_fp)) ggsave(fig_fp, height=8, width = 10)
-```
-
-#### Compare by ANP zone without land cover
-
-```{r compare-anp, fig.width=7, fig.height=4, cache=T}
-grp_var <- 'anp_zone'
-grp_var_code <- 'ANPzone'
-var2 <- NA
-var2_code <- 'noLC'
-
-# File name
-fn <- str_c('grpdiffs_', fn_prefix, '_', var2_code, '_', grp_var_code, '.rds')
-grp_diffs_fp <- file.path(div_dir, fn)
-medians_anp <- iterate_get_grp_diffs(df_samp, grp_var, var2, grp_diffs_fp, overwrite=TRUE)
-
-# Plot
-medians_anp %>% 
-  plot_pollin_facet('All', var2='pol_group', grp_var=grp_var,
-                    rows_var = 'biome', cols_var = 'pol_group', 
-                    facet_scales = 'free_x') +
-    scale_x_continuous(n.breaks= 4) +
-    theme(axis.title.y = element_blank(),
-        axis.title.x = element_text(margin= margin(t=6, unit='pt')),
-        axis.text.x = element_text(hjust=c(0, 0.5, 1)), 
-        plot.title = element_blank(), 
-        legend.position = 'bottom', 
-        legend.box.spacing = unit(1, 'pt'),
-        strip.text = element_text(size=rel(0.8)),
-        panel.background = element_rect(fill=alpha('#A6A6A6', 0.3), 
-                                        color='white'),
-        panel.grid = element_line(color='lightgray'),
-        panel.grid.minor.x = element_line(color='lightgray'),
-        plot.background = element_rect(fill = 'white')
-        ) +
-    labs(caption = caption)
-
-# Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_polxbiome.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, width=9, height=5)
-
-# Plot only bees
-medians_anp %>% 
-  filter(pol_group == 'bee') %>% 
-  plot_pollin_facet('All', var2='pol_group', grp_var=grp_var) +
-    scale_x_continuous(n.breaks= 4) +
-    theme(axis.title.y = element_blank(),
-        axis.title.x = element_text(margin= margin(t=6, unit='pt')),
-        axis.text.x = element_text(hjust=c(0, 0.5, 1)), 
-        plot.title = element_blank(), 
-        legend.position = 'bottom', 
-        legend.box.spacing = unit(1, 'pt'),
-        strip.text = element_text(size=rel(0.8)),
-        panel.background = element_rect(fill=alpha('#A6A6A6', 0.3), 
-                                        color='white'),
-        panel.grid = element_line(color='lightgray'),
-        panel.grid.minor.x = element_line(color='lightgray'),
-        plot.background = element_rect(fill = 'white')
-        ) +
-    labs(caption = caption)
-
-# Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, width=6, height=2)
-```
-
-#### Compare bee subgroups
-
-First, need to create the richness layers
-
-### Richness data frames
-
-Convert rasters to dataframes of richness by ANP zone, biome, land cover, and pollinator group. 
-
-```{r bees make div_df}
-# Load stacked zones
-combo_ras <- terra::rast(zones_ras_fp)
-
-rich_dir <- file.path(pred_dir, 'richness', 'bee_subgroups')
-bees_df <- create_richness_df(rich_dir, div_dir, zones_lu_fp, combo_ras, overwrite = TRUE)
-
-# Stratified random sample
-(n_pols <- length(levels(bees_df$pol_group)))
-fn_prefix <- str_c('samp', samp_n, '_rf', rf_vers, '_', n_pols, 'beegroups')
-samp_fp <- file.path(div_dir, str_c(fn_prefix, '.rds'))
-df_samp <- sample_df(bees_df, samp_n, samp_fp, 
-                     grp_vars = c('anp_zone', 'biome', 'landcover'),
-                     overwrite = TRUE)
-```
-
-
-
-
-
-
-
-
-```{r compare-anp, fig.width=7, fig.height=4, cache=T}
-grp_var <- 'anp_zone'
-grp_var_code <- 'ANPzone'
-var2 <- NA
-var2_code <- 'noLC'
-
-# File name
-fn <- str_c('grpdiffs_', fn_prefix, '_', var2_code, '_', grp_var_code, '.rds')
-grp_diffs_fp <- file.path(div_dir, fn)
-
-if(!file.exists(grp_diffs_fp)){
-  
-  # Get group differences for each combination of biome and ANP zone
-  if(is.na(var2)){
-    df_nest <- df_samp %>% 
-      group_by(pol_group, biome) %>% 
-      nest()
-  } else {
-    df_nest <- df_samp %>% 
-      group_by(pol_group, biome, .data[[var2]]) %>% 
-      nest()
-  }
-  medians_anp <- df_nest %>%
-    mutate(sum = purrr::map(data, get_grp_diffs, grp_var)) %>%
-    select(-data) %>% 
-    unnest(cols=sum)
-  
-  sg_levels <- sort(as.character(unique(medians_anp$sig_group)))
-  medians_anp <- medians_anp %>% mutate(sig_group = factor(sig_group, 
-                                              levels = sg_levels))
-  
-  # Save 
-  medians_anp %>% saveRDS(grp_diffs_fp)
-  
-} else {
-  
-  medians_anp <- readRDS(grp_diffs_fp)
-  
-}
-
-# Plot
-medians_anp %>% 
-  plot_pollin_facet('All', var2='pol_group', grp_var=grp_var,
-                    rows_var = 'biome', cols_var = 'pol_group', 
-                    facet_scales = 'free_x') +
-    scale_x_continuous(n.breaks= 4) +
-    theme(axis.title.y = element_blank(),
-        axis.title.x = element_text(margin= margin(t=6, unit='pt')),
-        axis.text.x = element_text(hjust=c(0, 0.5, 1)), 
-        plot.title = element_blank(), 
-        legend.position = 'bottom', 
-        legend.box.spacing = unit(1, 'pt'),
-        strip.text = element_text(size=rel(0.8)),
-        panel.background = element_rect(fill=alpha('#A6A6A6', 0.3), 
-                                        color='white'),
-        panel.grid = element_line(color='lightgray'),
-        panel.grid.minor.x = element_line(color='lightgray'),
-        plot.background = element_rect(fill = 'white')
-        ) +
-    labs(caption = caption)
-
-# Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_polxbiome.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, width=9, height=5)
-
-# Plot only bees
-medians_anp %>% 
-  filter(pol_group == 'bee') %>% 
-  plot_pollin_facet('All', var2='pol_group', grp_var=grp_var) +
-    scale_x_continuous(n.breaks= 4) +
-    theme(axis.title.y = element_blank(),
-        axis.title.x = element_text(margin= margin(t=6, unit='pt')),
-        axis.text.x = element_text(hjust=c(0, 0.5, 1)), 
-        plot.title = element_blank(), 
-        legend.position = 'bottom', 
-        legend.box.spacing = unit(1, 'pt'),
-        strip.text = element_text(size=rel(0.8)),
-        panel.background = element_rect(fill=alpha('#A6A6A6', 0.3), 
-                                        color='white'),
-        panel.grid = element_line(color='lightgray'),
-        panel.grid.minor.x = element_line(color='lightgray'),
-        plot.background = element_rect(fill = 'white')
-        ) +
-    labs(caption = caption)
-
-# Save figure
-fig_fp <- str_c(tools::file_path_sans_ext(grp_diffs_fp), '_bees.png')
-if(!file.exists(fig_fp)) ggsave(fig_fp, width=6, height=2)
 ```
