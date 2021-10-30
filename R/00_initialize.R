@@ -6,6 +6,7 @@
 library('tools')
 library('taxize')
 library('patchwork')
+library('colorspace')
 library('terra')
 library('dismo')
 library('raster') # use raster for compatibility with dismo
@@ -519,19 +520,22 @@ plot_richness <- function(rich_tif, species_ct, ref_poly, out_fp = NA) {
   col_lim <- round(rich_range)
   breaks <- seq(col_lim[1], col_lim[2], length.out=3)
   
+  palette <- sequential_hcl(5, palette = "PuRd", rev = TRUE)
+  
   # Plot richness
   rich_plot  <- ggplot() +
     geom_stars(data=pol_rich_stars) +
-    geom_sf(data = ref_poly, 
-            fill = "transparent", 
-            size = 0.2, 
-            color = alpha("lightgray", 0.2)) +
-    colormap::scale_fill_colormap(str_glue("Richness\n(N = {species_ct})"), 
+    geom_sf(data = ref_poly,
+            fill = "transparent",
+            size = 0.2,
+            color = "#969696"#alpha("#969696", 0.2)
+            ) +
+    scale_fill_gradientn(str_glue("Richness\n(N = {species_ct})"), 
                                   na.value = "transparent", 
-                                  colormap = colormap::colormaps$viridis, 
+                                  colors = palette, 
                                   breaks = breaks,
                                   labels = breaks,
-                                  limits = as.vector(col_lim)) +    
+                                  limits = as.vector(col_lim)) +     
     theme_minimal() +
     theme(legend.position = c(.95, 1), 
           legend.title.align = 0,

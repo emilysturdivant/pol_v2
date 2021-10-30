@@ -98,7 +98,7 @@ anps <- st_read(anp_terr_fp)
 species_ct <- 243
 rich_tif <- list.files(file.path(pred_dir, 'richness', 'bee_subgroups'),
                        'stems.*\\.tif', full.names = TRUE)
-rich_plot_fp <- file.path(pred_dir, 'richness', 'requested_maps', 'rf4_stemnesting_bees24lkhd_anps.png')
+rich_plot_fp <- file.path(pred_dir, 'richness', 'maps_palette2', 'rf4_stemnesting_bees24lkhd_anps.png')
 plot_richness(rich_tif, species_ct, anps, rich_plot_fp)
 
 
