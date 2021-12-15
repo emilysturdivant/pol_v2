@@ -15,6 +15,12 @@ Exploring the dynamic between pollinators and conservation land. This is a new a
 - administrative boundaries for context
 - polygons of natural protected areas (areas protegidas naturales, ANPs)
 
+### Files necessary to re-run the process (stored in the LANASE cluster)
+
+- Mexico states: input_data/.../dest18gw.shp
+- Stacked predictor variables with accompanying GRD file: all files in tidy/environment_variables 
+- If the above does not exist, then: all files in input_data/environment_variables/cropped
+
 ## Outputs
 
 ### Data 
