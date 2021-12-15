@@ -24,8 +24,7 @@ Exploring the dynamic between pollinators and conservation land. This is a new a
 
 ## Workflow
 
-1. Modify parameters in `initialize.R`, such as parameters for the filtering of species observation points and parameters for the random forest model. 
-  - 
+1. Modify parameters in `00_initialize.R`, such as parameters for the filtering of species observation points and parameters for the random forest model. 
 3. If the point data needs to be re-processed, run `prep_Quesada_GBIF_data.R`. The function `add_taxon_info` requires manual input when taxize needs help in identifying the best match. 
 4. To rerun the model, run `process_SDM_for_cluster.R`. 
 5. To perform spot-check and sum the SDMs into richness layers, run `process_SDM.R`.
