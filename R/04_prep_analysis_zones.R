@@ -244,6 +244,8 @@ merge_anp_zones_conditional <- function(bind_fp, anps_terr, anps_buff, vpols, bu
   return(anp_zones)
 }
 
+
+
 # Load data --------------------------------------------------------------------
 # Mexico
 mex <- st_read(mex_fp) %>% 
@@ -267,7 +269,7 @@ vpols <- get_voronois_conditional(anps_terr, buffer_distance, region_poly=mex0) 
   st_transform(crs=crs)
 
 # Get merged ANP zones ----
-anp_zones <- merge_anp_zones_conditional(bind_fp, anps_terr, anps_buff, 
+anp_zones <- merge_anp_zones_conditional(anp_zones_fp, anps_terr, anps_buff, 
                                            vpols, buffer_distance)
 
 # Ecoregions --------------------------------------------------------
@@ -351,6 +353,198 @@ anp_ids <- rasterize_zones(anps_terr, rich_ras,
                            field = 'ID_ANP', 
                            ras_fp = ras_fp, 
                            overwrite = TRUE)
+
+lu <- readRDS(zones_lu_fp)
+lu$ID_ANP <- anp_ids$lu
+saveRDS( lu, file=zones_lu_fp)
+
+
+# V2: combined ANP and buffer zones ----
+#' @export
+get_inclusive_buffer_conditional <- function(buffer_distance, anps_proj, area_fld='area_ha'){
+  # NPA buffer 
+  buffer_fp <- str_c('data/tidy/analysis_zones/ANPs/anps_inclusive_buffer_', buffer_distance,'km.gpkg')
+  
+  if(file.exists(buffer_fp)) {
+    
+    # Load buffer
+    anps_buff <- st_read(buffer_fp)
+    return(anps_buff)
+    
+  } 
+  
+  print(str_glue('Creating ANP buffer of {buffer_distance} km...'))
+  
+  # Create buffer around each ANP part
+  anps_buff <- anps_proj %>% 
+    st_buffer(buffer_distance, validate=T)
+  
+  # Buffer 
+  anps_buff2 <- anps_buff %>% 
+    group_by(rowname, ID_ANP) %>% 
+    summarise() %>% 
+    ungroup() %>%
+    st_cast('MULTIPOLYGON')
+  
+  # Get area
+  anps_buff2[[area_fld]] <- anps_buff2 %>% 
+    st_area %>% 
+    units::set_units('ha') %>% 
+    units::set_units(NULL)
+  
+  # Save
+  anps_buff2 %>% st_write(buffer_fp, delete_dsn=T)
+  
+  return(anps_buff2)
+}
+
+#' @export
+merge_anp_zones_inclusive_buffer_conditional <- function(bind_fp, anps_terr, anps_buff, vpols, buffer_distance) {
+  
+  if(file.exists(bind_fp)){
+    
+    anp_zones <- st_read(bind_fp)
+    return(anp_zones)
+    
+  }
+  
+  # Zone codes
+  inside_str <- str_c('NPA')
+  outside_str <- str_c('Not NPA')
+  
+  # Set zone names before binding
+  anps_buff$zone <- inside_str
+  vpols$zone <- outside_str
+  
+  # Create lookup list for recode
+  lu <- setNames(c('anp', 'out'), 
+                 c(inside_str, outside_str)) 
+  
+  # Bind SFCs
+  anp_zones <- bind_rows(st_cast(anps_buff, 'MULTIPOLYGON'),
+                         st_cast(vpols, 'MULTIPOLYGON')
+  ) %>% 
+    mutate(zone_temp = recode(zone, !!!lu),
+           name = str_c(zone_temp, rowname, sep='_')) %>% 
+    select(name, ID_ANP, area_ha, zone)
+  
+  # Save
+  anp_zones %>% st_write(bind_fp, delete_dsn=T)
+  
+  return(anp_zones)
+}
+
+# Load data --------------------------------------------------------------------
+# Mexico
+mex <- st_read(mex_fp) %>% 
+  st_transform(crs=crs) %>% 
+  st_simplify(dTolerance=40, preserveTopology=T) 
+
+mex0 <- st_union(mex)
+
+# ANP polygons -----------------------------------------------------------------
+anps_terr <- clean_anps_conditional(anps_in_fp, anp_terr_fp, crs, mex0) %>% 
+  st_transform(crs=crs)
+
+# ANP buffer 
+anps_buff <- get_inclusive_buffer_conditional(buffer_distance, 
+                                    anps_proj = anps_terr, 
+                                    area_fld = 'area_ha') %>% 
+  st_transform(crs=crs)
+
+# Voronoi polygons
+vpols <- get_voronois_conditional(anps_terr, buffer_distance, region_poly=mex0) %>% 
+  st_transform(crs=crs)
+
+# Get merged ANP zones ----
+anp_zones_fp <- here::here('data', 'tidy', 'analysis_zones', 'ANPs', 
+                      paste0('anps_allzones_inclusive_buff', buffer_distance, 'km.gpkg'))
+anp_zones <- merge_anp_zones_conditional(anp_zones_fp, anps_buff, vpols, buffer_distance)
+
+# Ecoregions --------------------------------------------------------
+# Biomes CONABIO 
+biom_diss <- get_biomes_conditional(biom_diss_fp, 
+                                    biom_dir = biom_dir, 
+                                    mex)
+
+# Land cover ----
+# Land cover from INEGI via CONABIO
+# Load file
+usv1 <- st_read(fp_usv) %>%
+  st_make_valid() %>%
+  st_transform(crs) %>%
+  st_simplify(dTolerance=40, preserveTopology=T)
+
+# classify into 7 classes
+usv7 <- usv1 %>%
+  mutate(tipo = case_when(
+    str_detect(DESCRIPCIO, 'INDUCIDO$') ~ 'inducido',
+    str_detect(DESCRIPCIO, '^PASTIZAL') ~ 'pastizal',
+    str_detect(CVE_UNION, '^V|^B|^S|^P') ~ 'vegetacion',# bosque, selva, pastizal, sabana, palmar, etc.
+    str_detect(DESCRIPCIO, '^AGRICULTURA') ~ 'agricultura', # does not include shifting cultivation (nómada)
+    str_detect(CVE_UNION, '^ACUI|^H2O') ~ 'agua',
+    str_detect(CVE_UNION, '^ADV|^DV') ~ 'sin_veg',
+    str_detect(CVE_UNION, '^AH') ~ 'construido',
+    TRUE ~ 'otro'
+  ))
+
+usv7 <- usv7 %>%
+  group_by(tipo) %>%
+  summarize() %>%
+  st_simplify(dTolerance=40, preserveTopology=T) %>%
+  nngeo::st_remove_holes(100000)
+
+# Save dissolved USV 
+usv7 %>% st_write(lc_7clas_fp, delete_dsn=T)
+
+# Reclass and dissolve to Veg, Ag, and Other
+key <- c(inducido='veg', pastizal='veg', vegetacion='veg', agricultura='ag',
+         agua='otro', sin_veg='otro', construido='otro')
+usv3 <- usv7 %>%
+  mutate(tipo =  recode(tipo, !!!key)) %>%
+  group_by(tipo) %>%
+  summarize() %>%
+  st_simplify(dTolerance=40, preserveTopology=T) %>%
+  nngeo::st_remove_holes(100000)
+
+# Save dissolved USV 
+usv3 %>% st_write(lc_3clas_fp, delete_dsn=T)
+
+# Convert to raster and stack ----
+# Input pollinator richness 
+fps <- list.files(file.path(pred_dir, 'richness'), '*\\.tif', full.names = TRUE)
+rich_ras <- terra::rast(fps[[1]])
+
+# Rasterize ANP zones
+anps <- rasterize_zones(anp_zones_fp, rich_ras, 
+                        field = 'zone', overwrite = FALSE)
+
+# Rasterize ecoregions
+biom <- rasterize_zones(biom_diss_fp, rich_ras, 
+                        field = 'DESECON1', overwrite = FALSE)
+
+# Rasterize landcover
+usv <- rasterize_zones(lc_3clas_fp, rich_ras, 
+                       field = 'tipo', overwrite = FALSE)
+
+# Combine zone rasters
+combo_ras <- c(anps$r, biom$r, usv$r)
+names(combo_ras) <- c('anp_zone', 'biome', 'landcover')
+
+combo_ras %>% terra::writeRaster(zones_ras_fp, overwrite=T)
+
+# Save lookup tables
+saveRDS( list(anp = anps$lu, biom = biom$lu, landcover = usv$lu), file=zones_lu_fp)
+
+
+
+
+# Rasterize ANP IDs
+ras_fp <- str_c(tools::file_path_sans_ext(anp_terr_fp), '.tif')
+anp_ids <- rasterize_zones(anps_terr, rich_ras, 
+                           field = 'ID_ANP', 
+                           ras_fp = ras_fp, 
+                           overwrite = FALSE)
 
 lu <- readRDS(zones_lu_fp)
 lu$ID_ANP <- anp_ids$lu

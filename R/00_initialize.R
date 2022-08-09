@@ -88,6 +88,7 @@ lc_3clas_fp <- file.path(zones_dir, 'landcover', str_c(usv_fname, '_diss_3class.
 # Zones raster and lookup table
 zone_polys_dir <- file.path(zones_dir, 'combined')
 zones_fn <- 'stack_anp_biome_usv_3x7x3'
+zones_fn <- 'stack_anp_biome_usv_2x7x3'
 zones_ras_fp <- file.path(zone_polys_dir, str_c(zones_fn, '.tif'))
 zones_lu_fp <- file.path(zone_polys_dir, str_c(zones_fn, '_lu.rds'))
 
