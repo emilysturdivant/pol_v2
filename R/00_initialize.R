@@ -87,8 +87,8 @@ lc_3clas_fp <- file.path(zones_dir, 'landcover', str_c(usv_fname, '_diss_3class.
 
 # Zones raster and lookup table
 zone_polys_dir <- file.path(zones_dir, 'combined')
-zones_fn <- 'stack_anp_biome_usv_3x7x3'
-zones_fn <- 'stack_anp_biome_usv_2x7x3'
+zones_code <- '2x7x3'
+zones_fn <- paste0('stack_anp_biome_usv_', zones_code)
 zones_ras_fp <- file.path(zone_polys_dir, str_c(zones_fn, '.tif'))
 zones_lu_fp <- file.path(zone_polys_dir, str_c(zones_fn, '_lu.rds'))
 
@@ -734,26 +734,31 @@ plot_qc_maps <- function(sp_row, fig_dir) {
 
 # Analysis zones ----
 rasterize_zones <- function(zones_fp, rich_ras, field = 'zone', 
-                            ras_fp = NA, overwrite = FALSE) {
+                            ras_fp = NULL, overwrite = FALSE) {
   
-  if(is.na(ras_fp) & is.character(zones_fp)) {
+  # Conditionally set output filepath
+  if(is.null(ras_fp) & is.character(zones_fp)) {
     ras_fp <- str_c(tools::file_path_sans_ext(zones_fp), '.tif')
   }
-
+  lu_fp <- str_c(tools::file_path_sans_ext(zones_fp), '_lookup.rds')
+  
+  # Conditionally retrieve raster if already exists
   if(file.exists(ras_fp) & !overwrite) {
-    return( list(r = terra::rast(ras_fp), lu = NA))
+    lu_vect <- readRDS(lu_fp)
+    return( list(r = terra::rast(ras_fp), lu = lu_vect))
     }
   
   # ANP polys
   polys <- terra::vect(zones_fp)
-  diss <- terra::aggregate(polys, by=field) %>%
-    terra::project(rich_ras)
+  diss <- terra::aggregate(polys, by=field)
+  diss <- terra::project(diss, rich_ras)
   
   # Set ID field
   ids <- as.integer(row.names(terra::values(diss)))
   
   # Get lookup table
   lu_vect <- setNames(terra::values(diss)[[1]], ids)
+  saveRDS(lu_vect, lu_fp)
   
   diss[[1]] <- ids
   
